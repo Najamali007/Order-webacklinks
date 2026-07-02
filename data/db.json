@@ -1,0 +1,236 @@
+{
+  "users": [
+    {
+      "id": "usr_admin",
+      "name": "Platform Admin",
+      "email": "admin@backlink.com",
+      "password": "$2b$10$L8D.VYGBq.zGTfw/NwxINOZsUPH3OnPHfmNUyIXRtquS7eAvosnUi",
+      "phone": "+923001234567",
+      "role": "admin",
+      "balance": 100000,
+      "status": "active",
+      "createdAt": "2026-01-01T12:00:00.000Z"
+    },
+    {
+      "id": "usr_client",
+      "name": "Test Client",
+      "email": "user@backlink.com",
+      "password": "$2b$10$L8D.VYGBq.zGTfw/NwxINO8GHmv4JP4.AIJkcRJjrLIeh7taNech2",
+      "phone": "+923219876543",
+      "role": "user",
+      "balance": 12670,
+      "status": "active",
+      "createdAt": "2026-06-15T09:30:00.000Z"
+    }
+  ],
+  "orders": [
+    {
+      "id": "ord_1",
+      "userId": "usr_client",
+      "userName": "Test Client",
+      "userEmail": "user@backlink.com",
+      "category": "Web 2.0",
+      "quantity": 120,
+      "totalCost": 1200,
+      "status": "completed",
+      "createdAt": "2026-06-20T10:00:00.000Z",
+      "pdfReport": "/uploads/reports/sample_report.pdf",
+      "deliveryLink": "https://docs.google.com/spreadsheets/d/sample",
+      "notes": "Highly optimized Web 2.0 list delivered.",
+      "completionDate": "2026-06-21T14:00:00.000Z"
+    },
+    {
+      "id": "ord_2",
+      "userId": "usr_client",
+      "userName": "Test Client",
+      "userEmail": "user@backlink.com",
+      "category": "Mixed Backlinks",
+      "quantity": 80,
+      "totalCost": 2400,
+      "status": "completed",
+      "createdAt": "2026-07-01T15:00:00.000Z",
+      "pdfReport": "/api/orders/ord_2/download-pdf?file=report-1782993694956-797346795.xlsx",
+      "deliveryLink": null,
+      "notes": null,
+      "completionDate": "2026-07-02T12:01:34.959Z"
+    },
+    {
+      "id": "ord_ctrdtg79r",
+      "userId": "usr_client",
+      "userName": "Test Client",
+      "userEmail": "user@backlink.com",
+      "category": "Wiki Related Sites",
+      "quantity": 233,
+      "totalCost": 2330,
+      "status": "pending",
+      "createdAt": "2026-07-02T12:22:48.438Z",
+      "pdfReport": null,
+      "deliveryLink": null,
+      "notes": "sdasdasdasd",
+      "completionDate": null,
+      "attachedFile": null,
+      "attachedFileName": null
+    }
+  ],
+  "deposits": [
+    {
+      "id": "dep_1",
+      "userId": "usr_client",
+      "userName": "Test Client",
+      "userEmail": "user@backlink.com",
+      "amount": 5000,
+      "paymentMethod": "Easypaisa",
+      "transactionId": "TXN987654321",
+      "screenshot": null,
+      "status": "approved",
+      "createdAt": "2026-06-15T10:00:00.000Z",
+      "reviewedAt": "2026-06-15T11:30:00.000Z"
+    },
+    {
+      "id": "dep_y3mhbv10w",
+      "userId": "usr_client",
+      "userName": "Test Client",
+      "userEmail": "user@backlink.com",
+      "amount": 500,
+      "paymentMethod": "Easypaisa",
+      "transactionId": "1234",
+      "screenshot": "/api/deposits/screenshot/screenshot-1782993810639-662271544.png",
+      "status": "pending",
+      "createdAt": "2026-07-02T12:03:30.651Z",
+      "reviewedAt": null
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif_6bs9q3hjj",
+      "userId": null,
+      "role": "admin",
+      "title": "New Order Submitted",
+      "message": "Test Client ordered 233 × Wiki Related Sites backlinks. Total: PKR 2,330",
+      "read": false,
+      "createdAt": "2026-07-02T12:22:48.457Z"
+    },
+    {
+      "id": "notif_6dvmb8sq4",
+      "userId": null,
+      "role": "admin",
+      "title": "New Deposit Request",
+      "message": "Test Client submitted a deposit request of PKR 500",
+      "read": false,
+      "createdAt": "2026-07-02T12:03:30.670Z"
+    },
+    {
+      "id": "notif_89itzeybf",
+      "userId": "usr_client",
+      "role": "user",
+      "title": "Order Completed 🎉",
+      "message": "Your backlink order (ID: ord_2) for 80 × Mixed Backlinks has been completed! Click to download your report.",
+      "read": false,
+      "createdAt": "2026-07-02T12:01:34.959Z"
+    },
+    {
+      "id": "notif_1",
+      "userId": "usr_client",
+      "role": "user",
+      "title": "Welcome aboard!",
+      "message": "Your SEO Backlink Hub account is active. Your current balance is Rs. 15,000.",
+      "read": false,
+      "createdAt": "2026-06-15T09:30:00.000Z"
+    }
+  ],
+  "settings": {
+    "websiteName": "WeBacklinks",
+    "logo": "WeBacklinks",
+    "currency": "PKR",
+    "depositInstructions": "Please send the amount to Easypaisa / JazzCash / Bank Account:\n\n- Easypaisa: 0300-1234567 (Title: SEO Hub Admin)\n- Bank Account: Allied Bank 0123456789 (Title: SEO Backlink Platform)\n\nAfter sending, input the Transaction ID, Deposit Amount, and Payment Method below.",
+    "contactEmail": "support@webacklinks.com",
+    "smtpEmail": "smtp-admin@webacklinks.com",
+    "smtpHost": "smtp.mailtrap.io",
+    "smtpPort": 2525,
+    "smtpUser": "your-smtp-username",
+    "smtpPass": "your-smtp-password",
+    "prices": {
+      "Web 2.0": 10,
+      "Web 2.0 Profile": 10,
+      "Web Directories": 10,
+      "Wiki Related Sites": 10,
+      "Social Bookmarking": 10,
+      "Listing Sites": 30,
+      "Mixed Backlinks": 30,
+      "PDF Submission": 40,
+      "Article Submission": 50
+    },
+    "categories": [
+      {
+        "name": "Web 2.0",
+        "price": 10,
+        "minLimit": 100,
+        "maxLimit": 10000
+      },
+      {
+        "name": "Web 2.0 Profile",
+        "price": 10,
+        "minLimit": 100,
+        "maxLimit": 10000
+      },
+      {
+        "name": "Web Directories",
+        "price": 10,
+        "minLimit": 100,
+        "maxLimit": 10000
+      },
+      {
+        "name": "Wiki Related Sites",
+        "price": 10,
+        "minLimit": 100,
+        "maxLimit": 10000
+      },
+      {
+        "name": "Social Bookmarking",
+        "price": 10,
+        "minLimit": 100,
+        "maxLimit": 10000
+      },
+      {
+        "name": "Listing Sites",
+        "price": 30,
+        "minLimit": 50,
+        "maxLimit": 5000
+      },
+      {
+        "name": "Mixed Backlinks",
+        "price": 30,
+        "minLimit": 50,
+        "maxLimit": 5000
+      },
+      {
+        "name": "PDF Submission",
+        "price": 40,
+        "minLimit": 50,
+        "maxLimit": 5000
+      },
+      {
+        "name": "Article Submission",
+        "price": 50,
+        "minLimit": 50,
+        "maxLimit": 5000
+      }
+    ],
+    "bankAccounts": [
+      {
+        "id": "bank_1",
+        "bankName": "Meezan Bank Limited",
+        "accountName": "SEO Backlink Hub",
+        "accountNumber": "1234-01020304-5",
+        "iban": "PK49MEZN01234010203045"
+      },
+      {
+        "id": "bank_2",
+        "bankName": "Easypaisa Mobile Account",
+        "accountName": "Muhammad Ali",
+        "accountNumber": "0300-1234567",
+        "iban": "N/A"
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "WeBacklinks",
+  "description": "A secure and professional Hostinger-compatible platform for ordering SEO backlinks, tracking balances, managing deposits, and uploading reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
