@@ -21,7 +21,7 @@ import {
 import { User, Order, DepositRequest, Notification, AppSettings } from "./src/types.js";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // Enable JSON body and URL encoded data parsing with large limits
 app.use(express.json({ limit: "50mb" }));
@@ -1009,9 +1009,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 SEO Backlink Platform running at http://localhost:${PORT}`);
-  });
+  if (process.env.NODE_ENV === "production") {
+    app.listen(PORT, () => {
+      console.log(`🚀 SEO Backlink Platform running in production on port ${PORT}`);
+    });
+  } else {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 SEO Backlink Platform running in development at http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
