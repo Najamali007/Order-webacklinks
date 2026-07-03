@@ -92,6 +92,22 @@ export interface AppSettings {
   prices: Record<string, number>; // Mapping category -> price each
   categories?: BacklinkCategoryItem[]; // Custom categories and packages
   bankAccounts?: BankAccount[]; // Structured bank accounts for copy-paste
+  customTabs?: string[]; // Custom tab names for the dashboard
+  domainListFile?: string | null; // Attached file for Domain List
+  domainListFileName?: string | null; // Filename for attached Domain List
+  domainListUrl?: string | null; // Google Sheet/External Link for Domain List
+}
+
+export interface DashboardRow {
+  id: string;
+  category: string;
+  da: string;
+  dr: string;
+  price: string | number;
+  status?: string;
+  total?: string;
+  tab?: string;
+  createdAt: string;
 }
 
 export const BACKLINK_CATEGORIES = [

@@ -309,63 +309,76 @@ app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
 // 💳 DEPOSIT ROUTES
 // ==========================================
 
-app.post("/api/deposits", requireAuth, uploadScreenshot.single("screenshot"), async (req: AuthRequest, res) => {
-  const { amount, paymentMethod, transactionId } = req.body;
-  const user = req.user!;
-
-  if (!amount || !paymentMethod || !transactionId) {
-    return res.status(400).json({ error: "Deposit amount, payment method, and transaction ID are required." });
-  }
-
-  const depositAmount = parseFloat(amount);
-  if (isNaN(depositAmount) || depositAmount <= 0) {
-    return res.status(400).json({ error: "Invalid deposit amount." });
-  }
-
-  const screenshotPath = req.file ? `/api/deposits/screenshot/${req.file.filename}` : null;
-
-  const newDeposit: DepositRequest = {
-    id: "dep_" + Math.random().toString(36).substring(2, 11),
-    userId: user.id,
-    userName: user.name,
-    userEmail: user.email,
-    amount: depositAmount,
-    paymentMethod,
-    transactionId,
-    screenshot: screenshotPath,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-    reviewedAt: null,
-  };
-
-  db.createDeposit(newDeposit);
-
-  // Trigger Admin notifications
-  db.createNotification({
-    id: "notif_" + Math.random().toString(36).substring(2, 11),
-    userId: null,
-    role: "admin",
-    title: "New Deposit Request",
-    message: `${user.name} submitted a deposit request of ${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
-    read: false,
-    createdAt: new Date().toISOString(),
+app.post("/api/deposits", requireAuth, (req, res, next) => {
+  uploadScreenshot.single("screenshot")(req, res, (err) => {
+    if (err) {
+      console.error("❌ Multer screenshot upload error:", err);
+      return res.status(400).json({ error: err.message || "Failed to upload screenshot. Ensure the file is an image under 5MB." });
+    }
+    next();
   });
+}, async (req: AuthRequest, res) => {
+  try {
+    const { amount, paymentMethod, transactionId } = req.body;
+    const user = req.user!;
 
-  // SMTP Email to Admin
-  await sendNotificationEmail({
-    subject: `Deposit Request Received - ${user.name}`,
-    bodyTitle: "New Wallet Deposit Request",
-    details: {
-      "User Name": user.name,
-      "User Email": user.email,
-      "Deposit Amount": `${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
-      "Payment Method": paymentMethod,
-      "Transaction ID": transactionId,
-      "Request Date": new Date().toLocaleString(),
-    },
-  });
+    if (!amount || !paymentMethod || !transactionId) {
+      return res.status(400).json({ error: "Deposit amount, payment method, and transaction ID are required." });
+    }
 
-  res.status(201).json(newDeposit);
+    const depositAmount = parseFloat(amount);
+    if (isNaN(depositAmount) || depositAmount <= 0) {
+      return res.status(400).json({ error: "Invalid deposit amount." });
+    }
+
+    const screenshotPath = req.file ? `/api/deposits/screenshot/${req.file.filename}` : null;
+
+    const newDeposit: DepositRequest = {
+      id: "dep_" + Math.random().toString(36).substring(2, 11),
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      amount: depositAmount,
+      paymentMethod,
+      transactionId,
+      screenshot: screenshotPath,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      reviewedAt: null,
+    };
+
+    db.createDeposit(newDeposit);
+
+    // Trigger Admin notifications
+    db.createNotification({
+      id: "notif_" + Math.random().toString(36).substring(2, 11),
+      userId: null,
+      role: "admin",
+      title: "New Deposit Request",
+      message: `${user.name} submitted a deposit request of ${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    // SMTP Email to Admin
+    await sendNotificationEmail({
+      subject: `Deposit Request Received - ${user.name}`,
+      bodyTitle: "New Wallet Deposit Request",
+      details: {
+        "User Name": user.name,
+        "User Email": user.email,
+        "Deposit Amount": `${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
+        "Payment Method": paymentMethod,
+        "Transaction ID": transactionId,
+        "Request Date": new Date().toLocaleString(),
+      },
+    });
+
+    res.status(201).json(newDeposit);
+  } catch (error: any) {
+    console.error("❌ Error processing deposit:", error);
+    res.status(500).json({ error: error.message || "Failed to process deposit." });
+  }
 });
 
 app.get("/api/deposits", requireAuth, (req: AuthRequest, res) => {
@@ -465,104 +478,117 @@ app.get("/api/deposits/screenshot/:filename", requireAuth, (req: AuthRequest, re
 // 📦 ORDER ROUTES
 // ==========================================
 
-app.post("/api/orders", requireAuth, uploadAttachment.single("file"), async (req: AuthRequest, res) => {
-  const { category, quantity, notes } = req.body;
-  const user = req.user!;
-
-  if (!category || !quantity) {
-    return res.status(400).json({ error: "Category and Quantity are required." });
-  }
-
-  const orderQuantity = parseInt(quantity);
-  if (isNaN(orderQuantity) || orderQuantity <= 0) {
-    return res.status(400).json({ error: "Invalid order quantity." });
-  }
-
-  // Calculate pricing & limits dynamically
-  const settings = db.getSettings();
-  const catItem = (settings.categories || []).find(c => c.name === category);
-
-  const priceEach = catItem ? catItem.price : (settings.prices[category] || 10);
-  const minLimit = catItem ? catItem.minLimit : 50;
-  const maxLimit = catItem ? catItem.maxLimit : 50000;
-
-  if (orderQuantity < minLimit) {
-    return res.status(400).json({
-      error: `Minimum order quantity for ${category} is ${minLimit}.`,
-    });
-  }
-
-  if (orderQuantity > maxLimit) {
-    return res.status(400).json({
-      error: `Maximum order quantity for ${category} is ${maxLimit}.`,
-    });
-  }
-
-  const totalCost = orderQuantity * priceEach;
-
-  // Wallet check
-  if (user.balance < totalCost) {
-    return res.status(400).json({
-      error: "Insufficient Credit. Please Deposit First.",
-    });
-  }
-
-  // Deduct credit
-  const newBalance = user.balance - totalCost;
-  db.updateUser(user.id, { balance: newBalance });
-
-  const orderId = "ord_" + Math.random().toString(36).substring(2, 11);
-
-  // Create order
-  const newOrder: Order = {
-    id: orderId,
-    userId: user.id,
-    userName: user.name,
-    userEmail: user.email,
-    category,
-    quantity: orderQuantity,
-    totalCost,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-    pdfReport: null,
-    deliveryLink: null,
-    notes: notes || null,
-    completionDate: null,
-    attachedFile: req.file ? `/api/orders/${orderId}/download-attachment?file=${req.file.filename}` : null,
-    attachedFileName: req.file ? req.file.originalname : null,
-  };
-
-  db.createOrder(newOrder);
-
-  // Send System Notification to Admin
-  db.createNotification({
-    id: "notif_" + Math.random().toString(36).substring(2, 11),
-    userId: null,
-    role: "admin",
-    title: "New Order Submitted",
-    message: `${user.name} ordered ${orderQuantity} × ${category} backlinks. Total: ${settings.currency} ${totalCost.toLocaleString()}`,
-    read: false,
-    createdAt: new Date().toISOString(),
+app.post("/api/orders", requireAuth, (req, res, next) => {
+  uploadAttachment.single("file")(req, res, (err) => {
+    if (err) {
+      console.error("❌ Multer order attachment upload error:", err);
+      return res.status(400).json({ error: err.message || "Failed to upload order file attachment. Ensure it is under 25MB." });
+    }
+    next();
   });
+}, async (req: AuthRequest, res) => {
+  try {
+    const { category, quantity, notes } = req.body;
+    const user = req.user!;
 
-  // Send SMTP notification to Admin
-  await sendNotificationEmail({
-    subject: `New Order Submitted - ${category}`,
-    bodyTitle: "New SEO Backlink Order Received",
-    details: {
-      "User Name": user.name,
-      "User Email": user.email,
-      "Order Type": category,
-      Quantity: orderQuantity,
-      "Total Amount": `${settings.currency} ${totalCost.toLocaleString()}`,
-      Date: new Date().toLocaleString(),
-    },
-  });
+    if (!category || !quantity) {
+      return res.status(400).json({ error: "Category and Quantity are required." });
+    }
 
-  res.status(201).json({
-    order: newOrder,
-    balance: newBalance,
-  });
+    const orderQuantity = parseInt(quantity);
+    if (isNaN(orderQuantity) || orderQuantity <= 0) {
+      return res.status(400).json({ error: "Invalid order quantity." });
+    }
+
+    // Calculate pricing & limits dynamically
+    const settings = db.getSettings();
+    const catItem = (settings.categories || []).find(c => c.name === category);
+
+    const priceEach = catItem ? catItem.price : (settings.prices[category] || 10);
+    const minLimit = catItem ? catItem.minLimit : 50;
+    const maxLimit = catItem ? catItem.maxLimit : 50000;
+
+    if (orderQuantity < minLimit) {
+      return res.status(400).json({
+        error: `Minimum order quantity for ${category} is ${minLimit}.`,
+      });
+    }
+
+    if (orderQuantity > maxLimit) {
+      return res.status(400).json({
+        error: `Maximum order quantity for ${category} is ${maxLimit}.`,
+      });
+    }
+
+    const totalCost = orderQuantity * priceEach;
+
+    // Wallet check
+    if (user.balance < totalCost) {
+      return res.status(400).json({
+        error: "Insufficient Credit. Please Deposit First.",
+      });
+    }
+
+    // Deduct credit
+    const newBalance = user.balance - totalCost;
+    db.updateUser(user.id, { balance: newBalance });
+
+    const orderId = "ord_" + Math.random().toString(36).substring(2, 11);
+
+    // Create order
+    const newOrder: Order = {
+      id: orderId,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      category,
+      quantity: orderQuantity,
+      totalCost,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      pdfReport: null,
+      deliveryLink: null,
+      notes: notes || null,
+      completionDate: null,
+      attachedFile: req.file ? `/api/orders/${orderId}/download-attachment?file=${req.file.filename}` : null,
+      attachedFileName: req.file ? req.file.originalname : null,
+    };
+
+    db.createOrder(newOrder);
+
+    // Send System Notification to Admin
+    db.createNotification({
+      id: "notif_" + Math.random().toString(36).substring(2, 11),
+      userId: null,
+      role: "admin",
+      title: "New Order Submitted",
+      message: `${user.name} ordered ${orderQuantity} × ${category} backlinks. Total: ${settings.currency} ${totalCost.toLocaleString()}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Send SMTP notification to Admin
+    await sendNotificationEmail({
+      subject: `New Order Submitted - ${category}`,
+      bodyTitle: "New SEO Backlink Order Received",
+      details: {
+        "User Name": user.name,
+        "User Email": user.email,
+        "Order Type": category,
+        Quantity: orderQuantity,
+        "Total Amount": `${settings.currency} ${totalCost.toLocaleString()}`,
+        Date: new Date().toLocaleString(),
+      },
+    });
+
+    res.status(201).json({
+      order: newOrder,
+      balance: newBalance,
+    });
+  } catch (error: any) {
+    console.error("❌ Error processing order:", error);
+    res.status(500).json({ error: error.message || "Failed to process backlink order." });
+  }
 });
 
 app.get("/api/orders", requireAuth, (req: AuthRequest, res) => {
@@ -578,42 +604,55 @@ app.get("/api/orders", requireAuth, (req: AuthRequest, res) => {
 app.post(
   "/api/orders/:id/complete",
   requireAdmin,
-  uploadReport.single("report"),
-  (req: AuthRequest, res) => {
-    const { id } = req.params;
-    const { deliveryLink, notes } = req.body;
-
-    const order = db.getOrderById(id);
-    if (!order) {
-      return res.status(404).json({ error: "Order not found." });
-    }
-
-    if (!req.file && !deliveryLink) {
-      return res.status(400).json({ error: "Please upload a report file (PDF, Excel, CSV) or provide a delivery link." });
-    }
-
-    const reportPath = req.file ? `/api/orders/${order.id}/download-pdf?file=${req.file.filename}` : order.pdfReport;
-
-    const updatedOrder = db.updateOrder(id, {
-      status: "completed",
-      pdfReport: reportPath,
-      deliveryLink: deliveryLink || null,
-      notes: notes || null,
-      completionDate: new Date().toISOString(),
+  (req, res, next) => {
+    uploadReport.single("report")(req, res, (err) => {
+      if (err) {
+        console.error("❌ Multer report upload error:", err);
+        return res.status(400).json({ error: err.message || "Failed to upload report file. Ensure it is a valid PDF/CSV/Excel under 15MB." });
+      }
+      next();
     });
+  },
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { deliveryLink, notes } = req.body;
 
-    // Notify User
-    db.createNotification({
-      id: "notif_" + Math.random().toString(36).substring(2, 11),
-      userId: order.userId,
-      role: "user",
-      title: "Order Completed 🎉",
-      message: `Your backlink order (ID: ${order.id}) for ${order.quantity} × ${order.category} has been completed! Click to download your report.`,
-      read: false,
-      createdAt: new Date().toISOString(),
-    });
+      const order = db.getOrderById(id);
+      if (!order) {
+        return res.status(404).json({ error: "Order not found." });
+      }
 
-    res.json({ success: true, order: updatedOrder });
+      if (!req.file && !deliveryLink) {
+        return res.status(400).json({ error: "Please upload a report file (PDF, Excel, CSV) or provide a delivery link." });
+      }
+
+      const reportPath = req.file ? `/api/orders/${order.id}/download-pdf?file=${req.file.filename}` : order.pdfReport;
+
+      const updatedOrder = db.updateOrder(id, {
+        status: "completed",
+        pdfReport: reportPath,
+        deliveryLink: deliveryLink || null,
+        notes: notes || null,
+        completionDate: new Date().toISOString(),
+      });
+
+      // Notify User
+      db.createNotification({
+        id: "notif_" + Math.random().toString(36).substring(2, 11),
+        userId: order.userId,
+        role: "user",
+        title: "Order Completed 🎉",
+        message: `Your backlink order (ID: ${order.id}) for ${order.quantity} × ${order.category} has been completed! Click to download your report.`,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+
+      res.json({ success: true, order: updatedOrder });
+    } catch (error: any) {
+      console.error("❌ Error completing order:", error);
+      res.status(500).json({ error: error.message || "Failed to complete order." });
+    }
   }
 );
 
@@ -960,6 +999,70 @@ app.put("/api/admin/settings", requireAdmin, (req, res) => {
   const settingsData = req.body;
   const updatedSettings = db.updateSettings(settingsData);
   res.json({ success: true, settings: updatedSettings });
+});
+
+// ==========================================
+// 📊 DASHBOARD ROWS ROUTES
+// ==========================================
+
+// Get all dashboard rows for user side table
+app.get("/api/dashboard-rows", requireAuth, (req: AuthRequest, res) => {
+  res.json(db.getDashboardRows());
+});
+
+// Create a new dashboard row (Admin only)
+app.post("/api/admin/dashboard-rows", requireAdmin, (req, res) => {
+  const { category, da, dr, price, status, total, tab } = req.body;
+  if (!category || da === undefined || dr === undefined || price === undefined) {
+    return res.status(400).json({ error: "Category, DA, DR, and Price are required." });
+  }
+
+  const newRow = {
+    id: "db_row_" + Math.random().toString(36).substring(2, 11),
+    category,
+    da: String(da),
+    dr: String(dr),
+    price: price === "" ? "" : (isNaN(Number(price)) ? String(price) : Number(price)),
+    status: status ? String(status).trim() : "",
+    total: total ? String(total).trim() : "",
+    tab: tab ? String(tab).trim() : "",
+    createdAt: new Date().toISOString()
+  };
+
+  db.createDashboardRow(newRow);
+  res.status(201).json({ success: true, row: newRow });
+});
+
+// Update an existing dashboard row (Admin only)
+app.put("/api/admin/dashboard-rows/:id", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const { category, da, dr, price, status, total, tab } = req.body;
+
+  const updates: any = {};
+  if (category !== undefined) updates.category = category;
+  if (da !== undefined) updates.da = String(da);
+  if (dr !== undefined) updates.dr = String(dr);
+  if (price !== undefined) updates.price = price === "" ? "" : (isNaN(Number(price)) ? String(price) : Number(price));
+  if (status !== undefined) updates.status = String(status).trim();
+  if (total !== undefined) updates.total = String(total).trim();
+  if (tab !== undefined) updates.tab = String(tab).trim();
+
+  const updated = db.updateDashboardRow(id, updates);
+  if (!updated) {
+    return res.status(404).json({ error: "Dashboard row not found." });
+  }
+
+  res.json({ success: true, row: updated });
+});
+
+// Delete a dashboard row (Admin only)
+app.delete("/api/admin/dashboard-rows/:id", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const deleted = db.deleteDashboardRow(id);
+  if (!deleted) {
+    return res.status(404).json({ error: "Dashboard row not found." });
+  }
+  res.json({ success: true });
 });
 
 // ==========================================

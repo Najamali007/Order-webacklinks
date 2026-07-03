@@ -30,12 +30,16 @@ import {
   Copy,
   Check,
   ChevronDown,
+  ChevronRight,
   Landmark,
   UploadCloud,
   Mail,
-  Phone
+  Phone,
+  Table,
+  Link2,
+  Search
 } from "lucide-react";
-import { User, Order, DepositRequest, Notification, AppSettings, BACKLINK_CATEGORIES } from "../types.js";
+import { User, Order, DepositRequest, Notification, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
 
 interface UserDashboardProps {
@@ -48,13 +52,25 @@ interface UserDashboardProps {
 
 export default function UserDashboard({ user, token, settings, onLogout, onUpdateUser }: UserDashboardProps) {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<"dashboard" | "order" | "deposit" | "history" | "profile">("dashboard");
+  const [activeTab, setActiveTab] = useState<"main_dashboard" | "dashboard" | "order" | "deposit" | "history" | "profile">("main_dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isNewOrderDropdownOpen, setIsNewOrderDropdownOpen] = useState<boolean>(false);
 
   // States
   const [orders, setOrders] = useState<Order[]>([]);
   const [deposits, setDeposits] = useState<DepositRequest[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  
+  // Dashboard Table States
+  const [dashboardRows, setDashboardRows] = useState<DashboardRow[]>([]);
+  const [tableSearch, setTableSearch] = useState<string>("");
+  const [loadingTable, setLoadingTable] = useState<boolean>(true);
+  const [inventoryTab, setInventoryTab] = useState<string>("");
+  
+  // Calculator States
+  const [calcCategory, setCalcCategory] = useState<string>("");
+  const [calcQty, setCalcQty] = useState<number>(10);
+
   const [orderCategory, setOrderCategory] = useState<string>("Web 2.0");
   const [orderQty, setOrderQty] = useState<number>(100);
   const [orderNotes, setOrderNotes] = useState<string>("");
@@ -100,6 +116,66 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
       setCopiedField(fieldId);
       setTimeout(() => setCopiedField(null), 2000);
     });
+  };
+
+  const handleExportCSV = () => {
+    // 1. If admin has uploaded a custom file, download it!
+    if (settings?.domainListFile) {
+      try {
+        const base64Data = settings.domainListFile;
+        const fileName = settings.domainListFileName || "WeBacklinks_Domain_Inventory.csv";
+        
+        // Split if it contains data URI prefix
+        const parts = base64Data.split(",");
+        const content = parts.length > 1 ? parts[1] : parts[0];
+        
+        const raw = window.atob(content);
+        const rawLength = raw.length;
+        const uInt8Array = new Uint8Array(rawLength);
+        
+        for (let i = 0; i < rawLength; i++) {
+          uInt8Array[i] = raw.charCodeAt(i);
+        }
+        
+        const mimeType = base64Data.match(/data:([^;]+);/)?.[1] || "application/octet-stream";
+        const blob = new Blob([uInt8Array], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", fileName);
+        link.style.visibility = "hidden";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      } catch (err) {
+        console.error("Failed to download custom domain list file, falling back to generated CSV:", err);
+      }
+    }
+
+    // 2. If admin has specified an external sheet link but no file is attached, open it
+    if (settings?.domainListUrl) {
+      window.open(settings.domainListUrl, "_blank");
+      return;
+    }
+
+    // 3. Fallback: Dynamic CSV generation
+    if (!dashboardRows || dashboardRows.length === 0) return;
+    const headers = ["Category", "DA", "DR", "Price"];
+    const csvRows = [headers.join(",")];
+    for (const r of dashboardRows) {
+      const categoryEscaped = `"${r.category.replace(/"/g, '""')}"`;
+      csvRows.push([categoryEscaped, r.da, r.dr, r.price].join(","));
+    }
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `WeBacklinks_Domain_Inventory_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -159,25 +235,86 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
   const remainingBalance = user.balance - subtotal;
   const isInsufficient = user.balance < subtotal;
 
+  const table1Rows = (dashboardRows || []).filter(r => {
+    if (!r.status || r.status.trim() === "") return false;
+    
+    const catLower = r.category.toLowerCase();
+    const isGuestOrPremium = 
+      (r.tab && (r.tab.toLowerCase().includes("guest") || r.tab.toLowerCase().includes("premium"))) ||
+      catLower.includes("guest") || 
+      catLower.includes("premium");
+
+    if (isGuestOrPremium) return false;
+
+    return (
+      r.category.toLowerCase().includes(tableSearch.toLowerCase()) ||
+      (r.da && String(r.da).toLowerCase().includes(tableSearch.toLowerCase())) ||
+      (r.dr && String(r.dr).toLowerCase().includes(tableSearch.toLowerCase())) ||
+      (r.status && r.status.toLowerCase().includes(tableSearch.toLowerCase()))
+    );
+  });
+
+  const table2Rows = (dashboardRows || []).filter(r => {
+    if (!r.status || r.status.trim() === "") return false;
+    
+    const catLower = r.category.toLowerCase();
+    const isGuestOrPremium = 
+      (r.tab && (r.tab.toLowerCase().includes("guest") || r.tab.toLowerCase().includes("premium"))) ||
+      catLower.includes("guest") || 
+      catLower.includes("premium");
+
+    if (!isGuestOrPremium) return false;
+
+    return (
+      r.category.toLowerCase().includes(tableSearch.toLowerCase()) ||
+      (r.da && String(r.da).toLowerCase().includes(tableSearch.toLowerCase())) ||
+      (r.dr && String(r.dr).toLowerCase().includes(tableSearch.toLowerCase())) ||
+      (r.status && r.status.toLowerCase().includes(tableSearch.toLowerCase()))
+    );
+  });
+
+  const filteredRows = [...table1Rows, ...table2Rows];
+
+  useEffect(() => {
+    const tabs = settings?.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
+    if (tabs.length > 0 && !inventoryTab) {
+      setInventoryTab(tabs[0]);
+    }
+  }, [settings, inventoryTab]);
+
   useEffect(() => {
     fetchUserData();
+    if (activeTab === "order") {
+      setIsNewOrderDropdownOpen(true);
+    }
   }, [activeTab]);
 
   const fetchUserData = async () => {
     try {
+      setLoadingTable(true);
       const headers = { Authorization: `Bearer ${token}` };
       
-      const [ordersRes, depositsRes, notifsRes] = await Promise.all([
+      const [ordersRes, depositsRes, notifsRes, tableRes] = await Promise.all([
         fetch("/api/orders", { headers }),
         fetch("/api/deposits", { headers }),
         fetch("/api/notifications", { headers }),
+        fetch("/api/dashboard-rows", { headers }),
       ]);
 
       if (ordersRes.ok) setOrders(await ordersRes.json());
       if (depositsRes.ok) setDeposits(await depositsRes.json());
       if (notifsRes.ok) setNotifications(await notifsRes.json());
+      if (tableRes.ok) {
+        const rows = await tableRes.json();
+        setDashboardRows(rows);
+        if (rows && rows.length > 0) {
+          setCalcCategory(rows[0].category);
+        }
+      }
     } catch (e) {
       console.error("Failed to load user data logs:", e);
+    } finally {
+      setLoadingTable(false);
     }
   };
 
@@ -320,7 +457,18 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
         body: formData,
       });
 
-      const data = await res.json();
+      let data;
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        // Extract readable text if it is HTML (strip tags briefly or take first 150 chars)
+        const isHtml = text.trim().startsWith("<");
+        const cleanMessage = isHtml ? `Server error (Status ${res.status}): Please make sure all details and screenshots are correct.` : text;
+        throw new Error(cleanMessage || `Request failed with status code ${res.status}`);
+      }
+
       if (!res.ok) {
         throw new Error(data.error || "Deposit request failed.");
       }
@@ -424,56 +572,96 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
         {/* Menu Items */}
         <nav className="flex-1 px-4 py-6 space-y-3 bg-slate-50/40">
-          <div className="bg-slate-100 p-2.5 rounded-2xl border border-slate-200/60 space-y-2">
+          <div className="bg-slate-100 p-2 rounded-2xl border border-slate-200/60 space-y-1.5">
+            <button
+              id="nav-user-main-dash"
+              onClick={() => setActiveTab("main_dashboard")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+                activeTab === "main_dashboard"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
+                  : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
+              }`}
+            >
+              <Table size={13} />
+              <span>Dashboard</span>
+            </button>
+
             <button
               id="nav-user-dash"
               onClick={() => setActiveTab("dashboard")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
                 activeTab === "dashboard"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                   : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
               }`}
             >
-              <Layers size={14} />
-              <span>Dashboard Hub</span>
+              <Layers size={13} />
+              <span>Overview</span>
             </button>
             
+            {/* New Order Parent Button */}
             <button
-              id="nav-user-order"
-              onClick={() => setActiveTab("order")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+              id="nav-user-order-parent"
+              onClick={() => setIsNewOrderDropdownOpen(!isNewOrderDropdownOpen)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
                 activeTab === "order"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                  ? "bg-blue-50/70 text-blue-700 border-blue-200"
                   : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
               }`}
             >
-              <PlusCircle size={14} />
-              <span>New Order</span>
+              <div className="flex items-center gap-2.5">
+                <PlusCircle size={13} className={activeTab === "order" ? "text-blue-600" : ""} />
+                <span>New Order</span>
+              </div>
+              <ChevronDown
+                size={13}
+                className={`transition-transform duration-200 ${
+                  isNewOrderDropdownOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                }`}
+              />
             </button>
+
+            {/* Sub Category - Category Backlinks */}
+            {isNewOrderDropdownOpen && (
+              <div className="pl-2.5 pr-1 py-1 space-y-1 bg-slate-100/30 rounded-lg border border-slate-200/40 animate-slide-down">
+                <button
+                  id="nav-user-order-sub"
+                  onClick={() => setActiveTab("order")}
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                    activeTab === "order"
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-xs"
+                      : "bg-white text-slate-700 border-slate-200/50 hover:bg-slate-100"
+                  }`}
+                >
+                  <span className={`w-1 h-1 rounded-full shrink-0 ${activeTab === "order" ? "bg-white animate-pulse" : "bg-blue-500"}`} />
+                  <span>Categories</span>
+                </button>
+              </div>
+            )}
 
             <button
               id="nav-user-history"
               onClick={() => setActiveTab("history")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
                 activeTab === "history"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                   : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
               }`}
             >
-              <History size={14} />
+              <History size={13} />
               <span>Order History</span>
             </button>
 
             <button
               id="nav-user-profile"
               onClick={() => setActiveTab("profile")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
                 activeTab === "profile"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                   : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
               }`}
             >
-              <UserIcon size={14} />
+              <UserIcon size={13} />
               <span>My Profile</span>
             </button>
           </div>
@@ -583,49 +771,86 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           </div>
 
           <nav className="flex-1 space-y-3 bg-slate-50/40 p-1">
-            <div className="bg-slate-100 p-2.5 rounded-2xl border border-slate-200/60 space-y-2">
+            <div className="bg-slate-100 p-2 rounded-2xl border border-slate-200/60 space-y-1.5">
+              <button
+                onClick={() => { setActiveTab("main_dashboard"); setMobileMenuOpen(false); }}
+                className={`w-full flex items-center gap-2.5 p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                  activeTab === "main_dashboard"
+                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
+                    : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
+                }`}
+              >
+                <Table size={13} />
+                <span>Dashboard</span>
+              </button>
               <button
                 onClick={() => { setActiveTab("dashboard"); setMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
                   activeTab === "dashboard"
-                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                     : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
                 }`}
               >
-                <Layers size={14} />
-                <span>Dashboard Hub</span>
+                <Layers size={13} />
+                <span>Overview</span>
               </button>
+              {/* New Order Parent Button for Mobile */}
               <button
-                onClick={() => { setActiveTab("order"); setMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                onClick={() => setIsNewOrderDropdownOpen(!isNewOrderDropdownOpen)}
+                className={`w-full flex items-center justify-between p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
                   activeTab === "order"
-                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                    ? "bg-blue-50/70 text-blue-700 border-blue-200"
                     : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
                 }`}
               >
-                <PlusCircle size={14} />
-                <span>New Order</span>
+                <div className="flex items-center gap-2.5">
+                  <PlusCircle size={13} className={activeTab === "order" ? "text-blue-600" : ""} />
+                  <span>New Order</span>
+                </div>
+                <ChevronDown
+                  size={13}
+                  className={`transition-transform duration-200 ${
+                    isNewOrderDropdownOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                  }`}
+                />
               </button>
+
+              {/* Sub Category for Mobile */}
+              {isNewOrderDropdownOpen && (
+                <div className="pl-2.5 pr-1 py-1 space-y-1 bg-slate-100/30 rounded-lg border border-slate-200/40 animate-slide-down">
+                  <button
+                    onClick={() => { setActiveTab("order"); setMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-2 p-2 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                      activeTab === "order"
+                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-xs"
+                        : "bg-white text-slate-700 border-slate-200/50 hover:bg-slate-100"
+                    }`}
+                  >
+                    <span className={`w-1 h-1 rounded-full shrink-0 ${activeTab === "order" ? "bg-white animate-pulse" : "bg-blue-500"}`} />
+                    <span>Category Backlinks</span>
+                  </button>
+                </div>
+              )}
               <button
                 onClick={() => { setActiveTab("history"); setMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
                   activeTab === "history"
-                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                     : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
                 }`}
               >
-                <History size={14} />
+                <History size={13} />
                 <span>Order History</span>
               </button>
               <button
                 onClick={() => { setActiveTab("profile"); setMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
                   activeTab === "profile"
-                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-md shadow-blue-500/10"
+                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                     : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
                 }`}
               >
-                <UserIcon size={14} />
+                <UserIcon size={13} />
                 <span>My Profile</span>
               </button>
             </div>
@@ -707,12 +932,9 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               <Wallet size={18} className="text-blue-600" />
               <span>
                 Balance:{" "}
-                <button
-                  onClick={() => setShowTopUpModal(true)}
-                  className="font-bold text-blue-600 hover:text-blue-800 underline decoration-blue-400 cursor-pointer"
-                >
-                  {user.balance.toLocaleString()} Cr
-                </button>
+                <span className="font-bold text-slate-900">
+                  {user.balance.toLocaleString()} <span className="text-red-600 font-extrabold">Cr</span>
+                </span>
               </span>
             </div>
 
@@ -831,29 +1053,317 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
             <div className="flex items-center gap-1.5 font-semibold text-[11px] text-slate-800">
               <Wallet size={15} className="text-blue-600" />
-              <span>Bal: <button onClick={() => setShowTopUpModal(true)} className="font-bold text-blue-600 underline">{user.balance.toLocaleString()} Cr</button></span>
+              <span>Bal: <span className="font-bold text-slate-900">{user.balance.toLocaleString()} <span className="text-red-600 font-extrabold">Cr</span></span></span>
             </div>
           </div>
+        {/* --- TAB: DASHBOARD TABLE --- */}
+        {activeTab === "main_dashboard" && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Quick Action Bar (Smaller Buttons in One Row) */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-slate-200/80 shadow-xs">
+              <div className="flex items-center gap-2.5 pl-1">
+                <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+                <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wider">Campaign Tools</span>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                {/* Place New Order */}
+                <button
+                  onClick={() => setActiveTab("order")}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95"
+                >
+                  <PlusCircle size={12} />
+                  <span>Place New Order</span>
+                </button>
+
+                {/* Export Button */}
+                <button
+                  onClick={handleExportCSV}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95"
+                >
+                  <Download size={12} />
+                  <span>Export</span>
+                </button>
+
+                {/* Copy Sheet Link Button */}
+                <button
+                  onClick={() => {
+                    const sheetLink = settings?.domainListUrl || `${window.location.origin}/api/dashboard-rows`;
+                    handleCopyToClipboard(sheetLink, "inventory_copied");
+                  }}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80 px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest transition-all cursor-pointer active:scale-95"
+                >
+                  {copiedField === "inventory_copied" ? (
+                    <>
+                      <Check size={12} className="text-emerald-500 animate-bounce" />
+                      <span className="text-emerald-600 font-extrabold">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Link2 size={12} className="text-slate-500" />
+                      <span>Copy Link</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+            {loadingTable ? (
+              <div className="py-24 bg-white rounded-3xl border border-slate-200/80 shadow-md flex flex-col items-center justify-center gap-3">
+                <div className="w-8 h-8 border-3 border-blue-600/20 border-t-blue-600 rounded-full animate-spin" />
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Loading inventory data...</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+                {/* --- TABLE 1: AUTHORITY BACKLINKS INVENTORY --- */}
+                <div className="bg-white rounded-3xl border border-slate-200/80 shadow-md overflow-hidden">
+                  <div className="p-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="p-1 rounded-lg bg-blue-50 text-blue-600"><Table size={13} /></span>
+                        Authority Backlinks
+                      </h2>
+                      <p className="text-[10px] text-slate-400 mt-0.5">High power links to supercharge domain authority and search visibility</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-[10px] font-extrabold shrink-0">
+                      {table1Rows.length} Active
+                    </span>
+                  </div>
+
+                  {table1Rows.length === 0 ? (
+                    <div className="py-12 text-center bg-slate-50/20">
+                      <p className="text-xs text-slate-400 font-semibold">No standard backlinks available matching your search.</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Desktop view */}
+                      <div className="hidden md:block w-full overflow-hidden p-3 bg-slate-50/20">
+                        <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-2xs table-fixed">
+                          <thead>
+                            <tr className="bg-gradient-to-r from-slate-800 to-slate-900 text-slate-200 text-[10px] font-extrabold uppercase tracking-wider">
+                              <th className="px-2 py-2.5 text-center w-[6%]">#</th>
+                              <th className="px-2 py-2.5 w-[41%]">Category Name</th>
+                              <th className="px-2 py-2.5 text-center w-[9%]">DA</th>
+                              <th className="px-2 py-2.5 text-center w-[18%]">Price</th>
+                              <th className="px-2 py-2.5 text-center w-[10%]">Total</th>
+                              <th className="px-2 py-2.5 text-center w-[16%]">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {table1Rows.map((row, idx) => (
+                              <tr key={row.id} className="hover:bg-slate-50/85 transition-colors text-[11px] md:text-xs font-semibold text-slate-700 animate-fade-in">
+                                <td className="px-2 py-2.5 text-center font-mono text-slate-400 bg-slate-50/10 border-r border-slate-100 truncate">{idx + 1}</td>
+                                <td className="px-2 py-2.5 font-bold text-slate-900 truncate" title={row.category}>{row.category}</td>
+                                <td className="px-1 py-2.5 text-center">
+                                  <span className="inline-block px-1.5 py-0.5 font-mono font-black text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-md text-[10px] md:text-xs">
+                                    {row.da}
+                                  </span>
+                                </td>
+                                <td className="px-1 py-2.5 text-center font-black text-slate-900 font-mono text-[10px] md:text-xs truncate">
+                                  {row.price && String(row.price).trim() !== "" ? (
+                                    <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100 inline-block truncate max-w-full">
+                                      {row.price} <span className="text-[9px] font-extrabold text-red-600">Cr</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">-</span>
+                                  )}
+                                </td>
+                                <td className="px-1 py-2.5 text-center font-bold text-slate-500 font-mono text-[10px] md:text-[11px] truncate">
+                                  {row.total && String(row.total).trim() !== "" ? row.total : <span className="text-slate-400 font-normal italic">-</span>}
+                                </td>
+                                <td className="px-1 py-2.5 text-center">
+                                  <div className="flex items-center justify-center">
+                                    {String(row.status).toLowerCase().includes("coming soon") ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 font-bold text-[9px] md:text-[10px] border border-amber-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        <span className="w-1 h-1 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                                        <span className="truncate">{row.status}</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[9px] md:text-[10px] border border-emerald-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                                        <span className="truncate">{row.status}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Mobile view (Sleek cards layout) */}
+                      <div className="md:hidden p-4 bg-slate-50/30 space-y-3">
+                        {table1Rows.map((row, idx) => (
+                          <div key={row.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-1">
+                                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider">#{idx + 1}</span>
+                                <h4 className="text-xs font-extrabold text-slate-900 leading-snug">{row.category}</h4>
+                              </div>
+                              {String(row.status).toLowerCase().includes("coming soon") ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-amber-50 text-amber-700 font-bold text-[9px] border border-amber-100 uppercase tracking-wider shrink-0">
+                                  {row.status}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-[9px] border border-emerald-100 uppercase tracking-wider shrink-0">
+                                  {row.status}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-50 text-[11px]">
+                              <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50/50 rounded-lg">
+                                <span className="text-[10px] text-slate-400 font-bold">DA</span>
+                                <span className="font-mono font-black text-indigo-700">{row.da}</span>
+                              </div>
+                              <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50/50 rounded-lg">
+                                <span className="text-[10px] text-slate-400 font-bold">Price</span>
+                                <span className="font-mono font-black text-emerald-700">{row.price} <span className="text-red-600 font-extrabold">Cr</span></span>
+                              </div>
+                            </div>
+                            
+                            {row.total && String(row.total).trim() !== "" && (
+                              <div className="text-[10px] text-slate-400 font-bold flex justify-between items-center bg-slate-50/30 p-2 rounded-lg">
+                                <span>Total Domains</span>
+                                <span className="text-slate-700 font-mono">{row.total}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* --- TABLE 2: HIGH-DA GUEST POSTS & PREMIUM BLOGS --- */}
+                <div className="bg-white rounded-3xl border border-slate-200/80 shadow-md overflow-hidden">
+                  <div className="p-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="p-1 rounded-lg bg-violet-50 text-violet-600"><Layers size={13} /></span>
+                        High DA Guest Posts
+                      </h2>
+                      <p className="text-[10px] text-slate-400 mt-0.5">High authority editorial guest posts and targeted contextual placements</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-violet-50 border border-violet-100 text-violet-700 text-[10px] font-extrabold shrink-0">
+                      {table2Rows.length} Active
+                    </span>
+                  </div>
+
+                  {table2Rows.length === 0 ? (
+                    <div className="py-12 text-center bg-slate-50/20">
+                      <p className="text-xs text-slate-400 font-semibold">No guest posts available matching your search.</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Desktop view */}
+                      <div className="hidden md:block w-full overflow-hidden p-3 bg-slate-50/20">
+                        <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-2xs table-fixed">
+                          <thead>
+                            <tr className="bg-gradient-to-r from-slate-800 to-slate-900 text-slate-200 text-[10px] font-extrabold uppercase tracking-wider">
+                              <th className="px-2 py-2.5 text-center w-[6%]">#</th>
+                              <th className="px-2 py-2.5 w-[41%]">Category Name / Blog Topic</th>
+                              <th className="px-2 py-2.5 text-center w-[9%]">DA</th>
+                              <th className="px-2 py-2.5 text-center w-[18%]">Price</th>
+                              <th className="px-2 py-2.5 text-center w-[10%]">Total</th>
+                              <th className="px-2 py-2.5 text-center w-[16%]">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {table2Rows.map((row, idx) => (
+                              <tr key={row.id} className="hover:bg-slate-50/85 transition-colors text-[11px] md:text-xs font-semibold text-slate-700 animate-fade-in">
+                                <td className="px-2 py-2.5 text-center font-mono text-slate-400 bg-slate-50/10 border-r border-slate-100 truncate">{idx + 1}</td>
+                                <td className="px-2 py-2.5 font-bold text-slate-900 truncate" title={row.category}>{row.category}</td>
+                                <td className="px-1 py-2.5 text-center">
+                                  <span className="inline-block px-1.5 py-0.5 font-mono font-black text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-md text-[10px] md:text-xs">
+                                    {row.da}
+                                  </span>
+                                </td>
+                                <td className="px-1 py-2.5 text-center font-black text-slate-900 font-mono text-[10px] md:text-xs truncate">
+                                  {row.price && String(row.price).trim() !== "" ? (
+                                    <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100 inline-block truncate max-w-full">
+                                      {row.price} <span className="text-[9px] font-extrabold text-red-600">Cr</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">-</span>
+                                  )}
+                                </td>
+                                <td className="px-1 py-2.5 text-center font-bold text-slate-500 font-mono text-[10px] md:text-[11px] truncate">
+                                  {row.total && String(row.total).trim() !== "" ? row.total : <span className="text-slate-400 font-normal italic">-</span>}
+                                </td>
+                                <td className="px-1 py-2.5 text-center">
+                                  <div className="flex items-center justify-center">
+                                    {String(row.status).toLowerCase().includes("coming soon") ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 font-bold text-[9px] md:text-[10px] border border-amber-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        <span className="w-1 h-1 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                                        <span className="truncate">{row.status}</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[9px] md:text-[10px] border border-emerald-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                                        <span className="truncate">{row.status}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Mobile view (Sleek cards layout) */}
+                      <div className="md:hidden p-4 bg-slate-50/30 space-y-3">
+                        {table2Rows.map((row, idx) => (
+                          <div key={row.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-2xs space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-1">
+                                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider">#{idx + 1}</span>
+                                <h4 className="text-xs font-extrabold text-slate-900 leading-snug">{row.category}</h4>
+                              </div>
+                              {String(row.status).toLowerCase().includes("coming soon") ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-amber-50 text-amber-700 font-bold text-[9px] border border-amber-100 uppercase tracking-wider shrink-0">
+                                  {row.status}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-[9px] border border-emerald-100 uppercase tracking-wider shrink-0">
+                                  {row.status}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-50 text-[11px]">
+                              <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50/50 rounded-lg">
+                                <span className="text-[10px] text-slate-400 font-bold">DA</span>
+                                <span className="font-mono font-black text-indigo-700">{row.da}</span>
+                              </div>
+                              <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50/50 rounded-lg">
+                                <span className="text-[10px] text-slate-400 font-bold">Price</span>
+                                <span className="font-mono font-black text-emerald-700">{row.price} <span className="text-red-600 font-extrabold">Cr</span></span>
+                              </div>
+                            </div>
+                            
+                            {row.total && String(row.total).trim() !== "" && (
+                              <div className="text-[10px] text-slate-400 font-bold flex justify-between items-center bg-slate-50/30 p-2 rounded-lg">
+                                <span>Total Domains</span>
+                                <span className="text-slate-700 font-mono">{row.total}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* --- TAB: DASHBOARD HUB --- */}
         {activeTab === "dashboard" && (
           <div className="space-y-8 animate-fade-in">
-            {/* Header */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-6">
-              <div className="flex items-center gap-4">
-                <h1 className="font-sans text-xl font-light text-slate-500">
-                  Welcome back, <span className="text-slate-950 font-bold">{user.name}</span>
-                </h1>
-                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] rounded uppercase font-bold tracking-tighter border border-emerald-200">Account Active</span>
-              </div>
-              <button
-                id="dash-new-order-btn"
-                onClick={() => setActiveTab("order")}
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest shadow-md transition-colors cursor-pointer"
-              >
-                <PlusCircle size={14} />
-                + Place New Order
-              </button>
-            </div>
+
 
             {/* Stats Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -1307,7 +1817,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                       id="order-submit-btn"
                       type="submit"
                       disabled={orderSubmitting || isInsufficient}
-                      className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                      className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs uppercase tracking-widest rounded-lg transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                     >
                       {orderSubmitting ? (
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -1324,37 +1834,100 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 {/* Calculation Column */}
                 <div className="lg:col-span-2 space-y-6">
                   {/* Summary Card */}
-                  <div className="p-6 rounded-2xl bg-white border border-slate-200 text-slate-700 shadow-md relative overflow-hidden">
-                    <h3 className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-6">
-                      Cost Breakdowns
-                    </h3>
-
-                    <div className="space-y-4 font-mono text-xs">
-                      <div className="flex justify-between">
-                        <span className="text-slate-400 uppercase font-semibold">Quantity</span>
-                        <span className="font-bold text-slate-800">{orderQty.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-400 uppercase font-semibold">Price Per Link</span>
-                        <span className="font-bold text-slate-800">{settings.currency} {priceEach.toLocaleString()}</span>
-                      </div>
-                      <div className="border-t border-slate-100 pt-4 flex justify-between text-sm">
-                        <span className="text-slate-500 uppercase font-bold">Subtotal</span>
-                        <span className="font-bold text-slate-900">{settings.currency} {subtotal.toLocaleString()}</span>
-                      </div>
-
-                      <div className="border-t border-slate-100 pt-4 space-y-2.5 text-slate-500">
-                        <div className="flex justify-between">
-                          <span>Wallet Balance</span>
-                          <span>{settings.currency} {user.balance.toLocaleString()}</span>
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 text-slate-700 shadow-lg relative overflow-hidden transition-all duration-300 hover:shadow-xl">
+                    {/* Visual top accent bar */}
+                    <div className="h-1.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 absolute top-0 left-0 right-0" />
+                    
+                    <div className="flex items-center justify-between mb-5">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                          <FileText size={16} />
                         </div>
-                        <div className="flex justify-between text-red-600 font-semibold">
-                          <span>Deduction</span>
-                          <span>- {settings.currency} {subtotal.toLocaleString()}</span>
+                        <h3 className="text-xs uppercase tracking-widest text-slate-500 font-extrabold">
+                          Cost Breakdown
+                        </h3>
+                      </div>
+                      <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                        Invoice Draft
+                      </span>
+                    </div>
+
+                    {/* Order Details Segment */}
+                    <div className="bg-slate-50/50 rounded-xl p-4 border border-slate-100 space-y-3 mb-4">
+                      <div className="text-[9px] uppercase tracking-widest text-slate-400 font-bold mb-1">Order Details</div>
+                      
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-slate-500 font-medium">Quantity</span>
+                        <span className="font-mono text-xs font-extrabold text-slate-900 bg-white px-2.5 py-1 rounded-md border border-slate-100 shadow-2xs">
+                          {orderQty.toLocaleString()} Links
+                        </span>
+                      </div>
+                      
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-slate-500 font-medium">Price Per Link</span>
+                        <span className="font-mono text-xs font-extrabold text-slate-700 bg-white px-2.5 py-1 rounded-md border border-slate-100 shadow-2xs">
+                          {settings.currency} {priceEach.toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="border-t border-dashed border-slate-200 my-2 pt-2 flex justify-between items-center">
+                        <span className="text-xs text-slate-700 font-bold">Order Subtotal</span>
+                        <span className="font-mono text-sm font-extrabold text-indigo-600 bg-indigo-50/70 px-3 py-1 rounded-lg border border-indigo-100/60">
+                          {settings.currency} {subtotal.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Financial Summary Segment */}
+                    <div className="bg-slate-50/50 rounded-xl p-4 border border-slate-100 space-y-3">
+                      <div className="text-[9px] uppercase tracking-widest text-slate-400 font-bold mb-1">Financial Status</div>
+                      
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-500 font-medium">Current Wallet Balance</span>
+                        <span className="font-mono font-bold text-slate-800">
+                          {settings.currency} {user.balance.toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-500 font-medium">Order Cost Deduction</span>
+                        <span className="font-mono font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100/50 text-[11px]">
+                          - {settings.currency} {subtotal.toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Visual Balance Usage Progress Meter */}
+                      {user.balance > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex justify-between text-[9px] text-slate-400 font-bold uppercase tracking-wider">
+                            <span>Wallet Usage</span>
+                            <span>{Math.min(100, Math.round((subtotal / user.balance) * 100))}%</span>
+                          </div>
+                          <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                isInsufficient 
+                                  ? "bg-red-500 w-full animate-pulse" 
+                                  : "bg-gradient-to-r from-blue-500 to-indigo-600"
+                              }`}
+                              style={{ width: `${Math.min(100, (subtotal / user.balance) * 100)}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="flex justify-between font-bold border-t border-slate-100 pt-2 text-slate-800">
-                          <span>Remaining Balance</span>
-                          <span className={remainingBalance < 0 ? "text-red-600 font-bold" : "text-emerald-600 font-bold"}>
+                      )}
+
+                      <div className="border-t border-dashed border-slate-200 pt-3 mt-1">
+                        <div className={`p-3 rounded-xl flex justify-between items-center ${
+                          remainingBalance < 0 
+                            ? "bg-red-50 border border-red-100 text-red-900" 
+                            : "bg-emerald-50/80 border border-emerald-100/60 text-emerald-900"
+                        }`}>
+                          <span className="text-xs font-bold uppercase tracking-wider">
+                            {remainingBalance < 0 ? "Shortfall Amount" : "Post-Order Balance"}
+                          </span>
+                          <span className={`font-mono text-sm font-black ${
+                            remainingBalance < 0 ? "text-red-600" : "text-emerald-600"
+                          }`}>
                             {settings.currency} {remainingBalance.toLocaleString()}
                           </span>
                         </div>
@@ -1362,8 +1935,9 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                     </div>
 
                     {isInsufficient && (
-                      <div className="mt-6 p-3 rounded bg-red-50 border border-red-200 text-[10px] text-red-700 font-bold uppercase tracking-wider text-center">
-                        ⚠️ Insufficient Credit. Please Deposit First.
+                      <div className="mt-4 p-3.5 rounded-xl bg-gradient-to-r from-rose-50 to-red-50 border border-red-200/60 text-[10px] text-red-700 font-extrabold uppercase tracking-widest text-center flex items-center justify-center gap-2 shadow-inner">
+                        <AlertTriangle size={12} className="text-red-600 shrink-0 animate-bounce" />
+                        <span>Insufficient Wallet Credit. Deposit Required.</span>
                       </div>
                     )}
                   </div>
@@ -1405,9 +1979,9 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                               <thead>
                                 <tr className="border-b border-slate-200 text-slate-400 uppercase tracking-wider text-[9px] font-bold">
                                   <th className="pb-2">Package Category</th>
-                                  <th className="pb-2 text-right">Price Per Link</th>
-                                  <th className="pb-2 text-right">Min Qty</th>
-                                  <th className="pb-2 text-right">Max Qty</th>
+                                  <th className="pb-2 text-center">Price Per Link</th>
+                                  <th className="pb-2 text-center">Min Qty</th>
+                                  <th className="pb-2 text-center">Max Qty</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
@@ -1417,9 +1991,9 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                                 ).map((cat: any) => (
                                   <tr key={cat.name} className="hover:bg-slate-50">
                                     <td className="py-2.5 font-bold text-slate-800">{cat.name}</td>
-                                    <td className="py-2.5 text-right font-bold text-blue-600 font-mono">{settings.currency} {cat.price}</td>
-                                    <td className="py-2.5 text-right font-mono text-slate-500">{(cat.minLimit || 50).toLocaleString()}</td>
-                                    <td className="py-2.5 text-right font-mono text-slate-500">{(cat.maxLimit || 5000).toLocaleString()}</td>
+                                    <td className="py-2.5 text-center font-bold text-blue-600 font-mono">{cat.price} <span className="text-red-600 font-extrabold">Cr</span></td>
+                                    <td className="py-2.5 text-center font-mono text-slate-500">{(cat.minLimit || 50).toLocaleString()}</td>
+                                    <td className="py-2.5 text-center font-mono text-slate-500">{(cat.maxLimit || 5000).toLocaleString()}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1469,13 +2043,14 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
               {/* Payment Instructions Column */}
-              <div className="lg:col-span-2 p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
+              <div className="lg:col-span-2 p-6 rounded-3xl bg-gradient-to-br from-slate-50 via-slate-100/40 to-blue-50/20 border border-slate-200/80 shadow-md flex flex-col justify-between">
                 <div className="space-y-6">
                   <div>
-                    <h3 className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
-                      Transfer Instructions
+                    <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-3 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+                      <span>Transfer Instructions</span>
                     </h3>
-                    <div className="text-[11px] text-slate-500 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 font-medium">
+                    <div className="text-[11px] text-slate-600 leading-relaxed bg-gradient-to-r from-blue-500/5 to-indigo-500/5 p-4 rounded-2xl border border-blue-100/50 space-y-2.5 font-medium shadow-2xs">
                       <p>1. Transfer the exact deposit amount to any of the verified bank accounts listed below.</p>
                       <p>2. Save or screenshot the transaction confirmation / transfer receipt.</p>
                       <p>3. Submit the deposit request form with your account name, transaction ID, and upload the receipt proof.</p>
@@ -1484,74 +2059,117 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   </div>
 
                   <div>
-                    <h3 className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
-                      Selectable Bank Accounts (Click to Copy)
+                    <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-4 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+                      <span>Verified Bank Accounts</span>
                     </h3>
                     {(!settings.bankAccounts || settings.bankAccounts.length === 0) ? (
                       <p className="text-[11px] text-slate-400 italic">No bank accounts configured by administrator yet.</p>
                     ) : (
                       <div className="space-y-4">
                         {settings.bankAccounts.map((acc, index) => (
-                          <div key={acc.id || index} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5 relative hover:border-slate-300 transition-colors">
-                            <div className="flex items-center justify-between border-b border-slate-200/60 pb-1.5">
-                              <span className="text-xs font-bold text-slate-800 tracking-tight">{acc.bankName}</span>
-                              <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase">Account {index + 1}</span>
+                          <div key={acc.id || index} className="p-0 rounded-2xl border border-slate-200/85 bg-white hover:border-blue-400/60 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans">
+                            {/* Header banner of the card */}
+                            <div className="bg-gradient-to-r from-slate-50 to-slate-100/80 px-4 py-3 flex justify-between items-center border-b border-slate-200/60">
+                              <div className="flex items-center gap-2">
+                                <div className="p-1.5 bg-blue-500/10 text-blue-600 rounded-lg">
+                                  <Landmark size={14} className="animate-pulse" />
+                                </div>
+                                <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
+                              </div>
+                              <span className="text-[9px] font-extrabold text-blue-600 bg-blue-50 border border-blue-100/50 px-2.5 py-0.5 rounded-full uppercase">Account {index + 1}</span>
                             </div>
                             
-                            <div className="space-y-1.5 text-xs text-slate-600">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-400">Title:</span>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-semibold text-slate-800">{acc.accountName}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyToClipboard(acc.accountName, `${acc.id}-name`)}
-                                    className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                                    title="Copy Account Title"
-                                  >
-                                    {copiedField === `${acc.id}-name` ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
-                                  </button>
-                                  {copiedField === `${acc.id}-name` && (
-                                    <span className="text-[9px] text-emerald-600 font-semibold animate-pulse">Copied!</span>
-                                  )}
+                            {/* Rows list of bank details */}
+                            <div className="p-4 space-y-3 bg-gradient-to-b from-white to-slate-50/40">
+                              {/* Account Name Row */}
+                              <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Account Title</span>
+                                  <span className="text-xs font-bold text-slate-800 font-sans leading-tight truncate">{acc.accountName}</span>
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyToClipboard(acc.accountName, `${acc.id}-name`)}
+                                  className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                                    copiedField === `${acc.id}-name`
+                                      ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                      : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                                  }`}
+                                >
+                                  {copiedField === `${acc.id}-name` ? (
+                                    <>
+                                      <Check size={11} className="text-emerald-500 animate-bounce" />
+                                      <span>Copied</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy size={11} />
+                                      <span>Copy</span>
+                                    </>
+                                  )}
+                                </button>
                               </div>
 
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-400">A/C #:</span>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-mono text-slate-800 select-all">{acc.accountNumber}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyToClipboard(acc.accountNumber, `${acc.id}-number`)}
-                                    className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                                    title="Copy Account Number"
-                                  >
-                                    {copiedField === `${acc.id}-number` ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
-                                  </button>
-                                  {copiedField === `${acc.id}-number` && (
-                                    <span className="text-[9px] text-emerald-600 font-semibold animate-pulse">Copied!</span>
-                                  )}
+                              {/* Account Number Row */}
+                              <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Account Number</span>
+                                  <span className="text-xs font-black text-slate-800 font-mono tracking-wide leading-tight select-all truncate">{acc.accountNumber}</span>
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyToClipboard(acc.accountNumber, `${acc.id}-number`)}
+                                  className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                                    copiedField === `${acc.id}-number`
+                                      ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                      : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                                  }`}
+                                >
+                                  {copiedField === `${acc.id}-number` ? (
+                                    <>
+                                      <Check size={11} className="text-emerald-500 animate-bounce" />
+                                      <span>Copied</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy size={11} />
+                                      <span>Copy</span>
+                                    </>
+                                  )}
+                                </button>
                               </div>
 
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-400">IBAN:</span>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-mono text-slate-800 select-all text-[11px] truncate max-w-[130px]">{acc.iban}</span>
+                              {/* IBAN Row if present */}
+                              {acc.iban && (
+                                <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">IBAN</span>
+                                    <span className="text-xs font-bold text-slate-800 font-mono tracking-tight leading-tight select-all truncate max-w-[150px]">{acc.iban}</span>
+                                  </div>
                                   <button
                                     type="button"
                                     onClick={() => handleCopyToClipboard(acc.iban, `${acc.id}-iban`)}
-                                    className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                                    title="Copy IBAN"
+                                    className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                                      copiedField === `${acc.id}-iban`
+                                        ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                        : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                                    }`}
                                   >
-                                    {copiedField === `${acc.id}-iban` ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                                    {copiedField === `${acc.id}-iban` ? (
+                                      <>
+                                        <Check size={11} className="text-emerald-500 animate-bounce" />
+                                        <span>Copied</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Copy size={11} />
+                                        <span>Copy</span>
+                                      </>
+                                    )}
                                   </button>
-                                  {copiedField === `${acc.id}-iban` && (
-                                    <span className="text-[9px] text-emerald-600 font-semibold animate-pulse">Copied!</span>
-                                  )}
                                 </div>
-                              </div>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -1567,69 +2185,83 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               </div>
 
               {/* Deposit Form Column */}
-              <div className="lg:col-span-3 p-6 md:p-8 rounded-2xl bg-white border border-slate-200 shadow-sm">
+              <div className="lg:col-span-3 p-6 md:p-8 rounded-3xl bg-gradient-to-br from-white via-slate-50/50 to-blue-50/10 border border-slate-200/80 shadow-md">
                 <form onSubmit={handleDepositSubmit} className="space-y-5">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
+                      <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
                         Your Name
                       </label>
                       <input
                         type="text"
                         disabled
                         value={user.name}
-                        className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-100 text-slate-500 text-xs focus:outline-none font-medium"
+                        className="w-full px-4 py-3 rounded-xl bg-slate-100/70 border border-slate-200 text-slate-500 text-xs font-semibold focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
+                      <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
                         Your Email
                       </label>
                       <input
                         type="email"
                         disabled
                         value={user.email}
-                        className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-100 text-slate-500 text-xs focus:outline-none font-medium"
+                        className="w-full px-4 py-3 rounded-xl bg-slate-100/70 border border-slate-200 text-slate-500 text-xs font-semibold focus:outline-none break-all"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
-                      Deposit Amount ({settings.currency})
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
+                      Deposit Amount ({settings.currency}) <span className="text-red-500 font-bold">*</span>
                     </label>
-                    <input
-                      id="deposit-amount"
-                      type="number"
-                      required
-                      placeholder="e.g. 15000"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      className="w-full px-4 py-3 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                    />
+                    <div className="relative">
+                      <input
+                        id="deposit-amount"
+                        type="number"
+                        required
+                        min="1"
+                        placeholder="e.g. 15000"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold shadow-2xs"
+                      />
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">
+                        {settings.currency === "PKR" ? "₨" : settings.currency}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
-                        Payment Method
+                      <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
+                        Payment Method <span className="text-red-500 font-bold">*</span>
                       </label>
-                      <select
-                        id="deposit-method"
-                        value={depositMethod}
-                        onChange={(e) => setDepositMethod(e.target.value)}
-                        className="w-full px-4 py-3 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                      >
-                        <option value="Easypaisa">Easypaisa</option>
-                        <option value="JazzCash">JazzCash</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                        <option value="USDT (TRC20)">USDT (TRC20)</option>
-                      </select>
+                      <div className="relative">
+                        <select
+                          id="deposit-method"
+                          value={depositMethod}
+                          onChange={(e) => setDepositMethod(e.target.value)}
+                          className="w-full pl-4 pr-10 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 appearance-none transition-all font-semibold cursor-pointer shadow-2xs"
+                        >
+                          <option value="Easypaisa">Easypaisa Mobile Wallet</option>
+                          <option value="JazzCash">JazzCash Mobile Wallet</option>
+                          <option value="Nayapay">Nayapay</option>
+                          <option value="Sadapay">Sadapay</option>
+                          <option value="HBL Bank">HBL Bank Ltd</option>
+                          <option value="Meezan Bank">Meezan Bank</option>
+                          <option value="UBL Bank">UBL Bank</option>
+                          <option value="Other Bank Transfer">Other Bank Transfer</option>
+                          <option value="USDT (TRC20)">USDT (TRC20)</option>
+                        </select>
+                        <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      </div>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
-                        Transaction ID (Txn ID)
+                      <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
+                        Transaction ID (Txn ID) <span className="text-red-500 font-bold">*</span>
                       </label>
                       <input
                         id="deposit-txn"
@@ -1638,33 +2270,43 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                         placeholder="e.g. 5001298457"
                         value={depositTxn}
                         onChange={(e) => setDepositTxn(e.target.value)}
-                        className="w-full px-4 py-3 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                        className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-mono font-bold uppercase tracking-wider shadow-2xs"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2">
-                      Payment Screenshot Receipt <span className="text-slate-500 font-mono font-normal">(optional)</span>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
+                      Payment Screenshot Receipt <span className="text-slate-400 font-mono font-normal">(optional)</span>
                     </label>
-                    <input
-                      id="deposit-screenshot"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          setDepositFile(e.target.files[0]);
-                        }
-                      }}
-                      className="w-full text-xs text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-lg file:border file:border-slate-200 file:text-[10px] file:uppercase file:font-bold file:bg-slate-50 file:text-slate-700 hover:file:bg-slate-100 cursor-pointer"
-                    />
+                    <div 
+                      onClick={() => document.getElementById('deposit-screenshot')?.click()}
+                      className="border-2 border-dashed border-slate-200 hover:border-blue-500/60 rounded-2xl p-6 bg-white/60 hover:bg-white text-center cursor-pointer transition-all group shadow-2xs flex flex-col items-center justify-center gap-1.5"
+                    >
+                      <input
+                        id="deposit-screenshot"
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            setDepositFile(e.target.files[0]);
+                          }
+                        }}
+                      />
+                      <UploadCloud size={20} className="text-slate-400 group-hover:text-blue-500 transition-colors animate-pulse" />
+                      <span className="text-[11px] font-bold text-slate-600 group-hover:text-blue-600 transition-colors">
+                        {depositFile ? depositFile.name : "Choose receipt screenshot or drag here"}
+                      </span>
+                      <span className="text-[9px] text-slate-400">PNG, JPG or JPEG up to 5MB</span>
+                    </div>
                   </div>
 
                   <button
                     id="deposit-submit-btn"
                     type="submit"
                     disabled={depositSubmitting}
-                    className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 disabled:from-slate-100 disabled:to-slate-200 disabled:text-slate-400 text-white font-extrabold text-xs uppercase tracking-widest rounded-lg transition-all shadow-md shadow-blue-500/5 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
                   >
                     {depositSubmitting ? (
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -1971,7 +2613,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   <button
                     type="submit"
                     disabled={profileSubmitting}
-                    className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold text-xs uppercase tracking-widest rounded-lg transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {profileSubmitting ? (
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -2019,66 +2661,106 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               ) : (
                 <div className="space-y-4">
                   {settings.bankAccounts.map((acc, index) => (
-                    <div key={acc.id || index} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5 relative hover:border-slate-300 transition-colors text-left font-sans">
-                      <div className="flex items-center justify-between border-b border-slate-200/60 pb-1.5">
-                        <span className="text-xs font-bold text-slate-800 tracking-tight">{acc.bankName}</span>
-                        <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase">Account {index + 1}</span>
+                    <div key={acc.id || index} className="p-0 rounded-2xl border border-slate-200/85 bg-white hover:border-blue-400/60 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans">
+                      {/* Header banner of the card */}
+                      <div className="bg-gradient-to-r from-slate-50 to-slate-100/80 px-4 py-3 flex justify-between items-center border-b border-slate-200/60">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1.5 bg-blue-500/10 text-blue-600 rounded-lg">
+                            <Landmark size={14} className="animate-pulse" />
+                          </div>
+                          <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
+                        </div>
+                        <span className="text-[9px] font-extrabold text-blue-600 bg-blue-50 border border-blue-100/50 px-2.5 py-0.5 rounded-full uppercase">Account {index + 1}</span>
                       </div>
                       
-                      <div className="space-y-1.5 text-xs text-slate-600">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] uppercase tracking-wider text-slate-400">Title:</span>
-                          <div className="flex items-center gap-1.5 font-sans">
-                            <span className="font-semibold text-slate-800">{acc.accountName}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyToClipboard(acc.accountName, `${acc.id}-modal-name`)}
-                              className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                              title="Copy Account Title"
-                            >
-                              {copiedField === `${acc.id}-modal-name` ? <Check size={11} className="text-blue-600" /> : <Copy size={11} />}
-                            </button>
-                            {copiedField === `${acc.id}-modal-name` && (
-                              <span className="text-[9px] text-blue-600 font-semibold animate-pulse">Copied!</span>
-                            )}
+                      {/* Rows list of bank details */}
+                      <div className="p-4 space-y-3 bg-gradient-to-b from-white to-slate-50/40">
+                        {/* Account Name Row */}
+                        <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Account Title</span>
+                            <span className="text-xs font-bold text-slate-800 font-sans leading-tight truncate">{acc.accountName}</span>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyToClipboard(acc.accountName, `${acc.id}-modal-name`)}
+                            className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                              copiedField === `${acc.id}-modal-name`
+                                ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                            }`}
+                          >
+                            {copiedField === `${acc.id}-modal-name` ? (
+                              <>
+                                <Check size={11} className="text-emerald-500 animate-bounce" />
+                                <span>Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={11} />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
                         </div>
 
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] uppercase tracking-wider text-slate-400">A/C #:</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-slate-800 select-all font-bold">{acc.accountNumber}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyToClipboard(acc.accountNumber, `${acc.id}-modal-number`)}
-                              className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                              title="Copy Account Number"
-                            >
-                              {copiedField === `${acc.id}-modal-number` ? <Check size={11} className="text-blue-600" /> : <Copy size={11} />}
-                            </button>
-                            {copiedField === `${acc.id}-modal-number` && (
-                              <span className="text-[9px] text-blue-600 font-semibold animate-pulse">Copied!</span>
-                            )}
+                        {/* Account Number Row */}
+                        <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Account Number</span>
+                            <span className="text-xs font-black text-slate-800 font-mono tracking-wide leading-tight select-all truncate">{acc.accountNumber}</span>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyToClipboard(acc.accountNumber, `${acc.id}-modal-number`)}
+                            className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                              copiedField === `${acc.id}-modal-number`
+                                ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                            }`}
+                          >
+                            {copiedField === `${acc.id}-modal-number` ? (
+                              <>
+                                <Check size={11} className="text-emerald-500 animate-bounce" />
+                                <span>Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={11} />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
                         </div>
 
+                        {/* IBAN Row if present */}
                         {acc.iban && (
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] uppercase tracking-wider text-slate-400">IBAN:</span>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-mono text-slate-800 select-all text-[11px] truncate max-w-[150px]">{acc.iban}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleCopyToClipboard(acc.iban, `${acc.id}-modal-iban`)}
-                                className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-                                title="Copy IBAN"
-                              >
-                                {copiedField === `${acc.id}-modal-iban` ? <Check size={11} className="text-blue-600" /> : <Copy size={11} />}
-                              </button>
-                              {copiedField === `${acc.id}-modal-iban` && (
-                                <span className="text-[9px] text-blue-600 font-semibold animate-pulse">Copied!</span>
-                              )}
+                          <div className="flex items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-100/80 shadow-2xs hover:bg-slate-50/30 transition-colors">
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">IBAN</span>
+                              <span className="text-xs font-bold text-slate-800 font-mono tracking-tight leading-tight select-all truncate max-w-[150px]">{acc.iban}</span>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyToClipboard(acc.iban, `${acc.id}-modal-iban`)}
+                              className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-[10px] font-bold uppercase transition-all duration-200 cursor-pointer active:scale-95 ${
+                                copiedField === `${acc.id}-modal-iban`
+                                  ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                  : "bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border-slate-200 hover:border-blue-200"
+                              }`}
+                            >
+                              {copiedField === `${acc.id}-modal-iban` ? (
+                                <>
+                                  <Check size={11} className="text-emerald-500 animate-bounce" />
+                                  <span>Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={11} />
+                                  <span>Copy</span>
+                                </>
+                              )}
+                            </button>
                           </div>
                         )}
                       </div>
@@ -2113,14 +2795,14 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
       {/* --- TOP UP DEPOSIT MODAL --- */}
       {showTopUpModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="topup-request-modal">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden animate-zoom-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in" id="topup-request-modal">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-xl overflow-hidden animate-zoom-in">
             <div className="p-6 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <PlusCircle size={20} className="text-white" />
+              <div className="flex items-center gap-2.5">
+                <PlusCircle size={22} className="text-blue-100" />
                 <div>
-                  <h3 className="font-sans font-bold text-sm leading-none text-white">Log Deposit Top Up</h3>
-                  <p className="text-[9px] text-blue-100/75 uppercase tracking-widest font-mono mt-1">Submit your transaction details for credit approval</p>
+                  <h3 className="font-sans font-bold text-base leading-none text-white">Log Deposit Top Up</h3>
+                  <p className="text-[10px] text-blue-100/85 uppercase tracking-widest font-mono mt-1">Submit transaction details for credit approval</p>
                 </div>
               </div>
               <button
@@ -2131,38 +2813,42 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 <X size={18} />
               </button>
             </div>
-            <form onSubmit={handleDepositSubmit} className="p-6 space-y-5 max-h-[490px] overflow-y-auto text-left">
+            <form onSubmit={handleDepositSubmit} className="p-6 space-y-5 max-h-[520px] overflow-y-auto text-left bg-gradient-to-b from-white to-slate-50/60">
 
               {depositError && (
-                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-                  {depositError}
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold animate-shake">
+                  <div className="font-bold mb-0.5">Submission Error</div>
+                  <div className="font-mono text-[11px] leading-relaxed break-words">{depositError}</div>
                 </div>
               )}
 
               {/* Read-only user info shown in a beautiful slate metadata card */}
-              <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-200/60 shadow-xs">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-extrabold mb-1">
                     Depositor Name
                   </label>
-                  <div className="text-xs font-semibold text-slate-800">{user.name}</div>
+                  <div className="text-xs font-bold text-slate-700">{user.name}</div>
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 font-extrabold mb-1">
                     Depositor Email
                   </label>
-                  <div className="text-xs font-semibold text-slate-800 break-all">{user.email}</div>
+                  <div className="text-xs font-bold text-slate-700 break-all">{user.email}</div>
                 </div>
               </div>
 
               {/* Deposit amount and payment method gateway */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-slate-700 font-bold mb-1.5 flex items-center gap-1">
+                  <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5 flex items-center gap-1">
                     <span>Deposit Amount</span>
-                    <span className="text-[9px] text-slate-400 font-normal">({settings.currency})</span>
+                    <span className="text-[9px] text-slate-400 font-semibold">({settings.currency})</span>
                   </label>
-                  <div className="relative">
+                  <div className="relative flex items-stretch rounded-xl overflow-hidden border border-slate-200 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all shadow-xs bg-white">
+                    <span className="flex items-center justify-center px-3.5 bg-slate-50 border-r border-slate-200 text-slate-500 text-xs font-bold font-mono">
+                      {settings.currency === "PKR" ? "₨" : settings.currency}
+                    </span>
                     <input
                       type="number"
                       required
@@ -2170,22 +2856,19 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                       placeholder="e.g. 5000"
                       value={depositAmount}
                       onChange={(e) => setDepositAmount(e.target.value)}
-                      className="w-full pl-8 pr-4 py-3 rounded-xl bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all font-semibold"
+                      className="w-full px-3 py-3 bg-transparent text-slate-800 text-xs focus:outline-none font-semibold"
                     />
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">
-                      {settings.currency === "PKR" ? "₨" : settings.currency}
-                    </span>
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-slate-700 font-bold mb-1.5">
+                  <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5">
                     Payment Gateway Channel
                   </label>
-                  <div className="relative">
+                  <div className="relative flex items-stretch rounded-xl overflow-hidden border border-slate-200 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all shadow-xs bg-white">
                     <select
                       value={depositMethod}
                       onChange={(e) => setDepositMethod(e.target.value)}
-                      className="w-full pl-4 pr-10 py-3 rounded-xl bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 appearance-none transition-all font-semibold cursor-pointer"
+                      className="w-full pl-4 pr-10 py-3 bg-transparent text-slate-800 text-xs focus:outline-none appearance-none font-semibold cursor-pointer"
                     >
                       <option value="Easypaisa">Easypaisa Mobile Wallet</option>
                       <option value="JazzCash">JazzCash Mobile Wallet</option>
@@ -2204,7 +2887,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
               {/* Transaction ID */}
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-slate-700 font-bold mb-1.5">
+                <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5">
                   Transaction Ref / ID <span className="text-red-500 font-bold">*</span>
                 </label>
                 <input
@@ -2213,18 +2896,25 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   placeholder="Enter the unique bank transaction ID"
                   value={depositTxn}
                   onChange={(e) => setDepositTxn(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all font-mono font-bold uppercase tracking-wider"
+                  className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-mono font-bold uppercase tracking-wider shadow-xs"
                 />
               </div>
 
               {/* Custom Screenshot upload drag-and-drop zone */}
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-slate-700 font-bold mb-1.5">
+                <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5">
                   Upload Screenshot Proof / Receipt
                 </label>
                 <div 
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      setDepositFile(e.dataTransfer.files[0]);
+                    }
+                  }}
                   onClick={() => document.getElementById('deposit-screenshot-input')?.click()}
-                  className="border-2 border-dashed border-slate-200 hover:border-blue-500 rounded-2xl p-6 bg-slate-50/50 hover:bg-slate-50 text-center cursor-pointer transition-all group"
+                  className="border-2 border-dashed border-slate-200 hover:border-blue-500 bg-white/60 hover:bg-white rounded-2xl p-6 text-center cursor-pointer transition-all group shadow-xs hover:shadow-md flex flex-col items-center justify-center gap-2"
                 >
                   <input
                     id="deposit-screenshot-input"
@@ -2237,22 +2927,24 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                       }
                     }}
                   />
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shadow-2xs group-hover:scale-105 transition-transform">
+                    <UploadCloud size={18} />
+                  </div>
                   {depositFile ? (
                     <div className="space-y-1 animate-fade-in">
                       <p className="text-xs font-bold text-slate-800 break-all">{depositFile.name}</p>
-                      <p className="text-[10px] text-emerald-600 font-semibold font-mono">{(depositFile.size / 1024).toFixed(1)} KB • Click or Drag to replace</p>
+                      <p className="text-[10px] text-emerald-600 font-bold font-mono">{(depositFile.size / 1024).toFixed(1)} KB • Click or Drag to replace</p>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center">
-                      <UploadCloud size={24} className="text-slate-400 group-hover:text-blue-500 group-hover:scale-110 transition-all mb-2" />
+                    <div className="space-y-1">
                       <p className="text-xs font-bold text-slate-700">Choose receipt screenshot or drag here</p>
-                      <p className="text-[9px] text-slate-400 mt-1 uppercase tracking-wider">JPG, PNG format allowed. Max file size 5MB.</p>
+                      <p className="text-[9px] text-slate-400 uppercase tracking-wider font-semibold">JPG, PNG format allowed. Max file size 5MB.</p>
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="border-t border-slate-100 pt-4 flex items-center justify-between">
+              <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row gap-3 items-center justify-between">
                 <button
                   type="button"
                   onClick={() => {
@@ -2263,7 +2955,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 >
                   &larr; View Verified Bank Accounts
                 </button>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full sm:w-auto justify-end">
                   <button
                     type="button"
                     onClick={() => setShowTopUpModal(false)}
@@ -2274,7 +2966,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   <button
                     type="submit"
                     disabled={depositSubmitting}
-                    className="py-2.5 px-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:bg-slate-200 text-white text-xs font-bold uppercase tracking-widest rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                    className="py-2.5 px-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-slate-100 disabled:to-slate-200 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
                   >
                     {depositSubmitting ? (
                       <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>

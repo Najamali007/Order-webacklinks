@@ -6,7 +6,7 @@
 import fs from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
-import { User, Order, DepositRequest, Notification, AppSettings } from "../types.js";
+import { User, Order, DepositRequest, Notification, AppSettings, DashboardRow } from "../types.js";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
@@ -17,6 +17,7 @@ interface DatabaseSchema {
   deposits: DepositRequest[];
   notifications: Notification[];
   settings: AppSettings;
+  dashboardRows?: DashboardRow[];
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -67,7 +68,11 @@ const DEFAULT_SETTINGS: AppSettings = {
       accountNumber: "0300-1234567",
       iban: "N/A"
     }
-  ]
+  ],
+  customTabs: ["Authority Backlinks", "High DA Guest Posts"],
+  domainListFile: null,
+  domainListFileName: null,
+  domainListUrl: null
 };
 
 // Ensure database file exists and is seeded
@@ -128,9 +133,45 @@ function initializeDatabase(): DatabaseSchema {
           parsed.settings.bankAccounts = DEFAULT_SETTINGS.bankAccounts;
           dirty = true;
         }
-        if (dirty) {
-          fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), "utf-8");
-        }
+        parsed.settings.customTabs = ["Authority Backlinks", "High DA Guest Posts"];
+        dirty = true;
+      }
+
+      if (!parsed.dashboardRows) {
+        parsed.dashboardRows = [
+          {
+            id: "db_row_1",
+            category: "Tech & Gadgets Blogs",
+            da: "55",
+            dr: "60",
+            price: 1500,
+            status: "Available",
+            createdAt: new Date("2026-06-20T10:00:00Z").toISOString()
+          },
+          {
+            id: "db_row_2",
+            category: "Business & Finance News",
+            da: "62",
+            dr: "65",
+            price: 2500,
+            status: "Available",
+            createdAt: new Date("2026-06-21T11:00:00Z").toISOString()
+          },
+          {
+            id: "db_row_3",
+            category: "Health & Wellness Sites",
+            da: "48",
+            dr: "50",
+            price: 1200,
+            status: "Available",
+            createdAt: new Date("2026-06-22T12:00:00Z").toISOString()
+          }
+        ];
+        dirty = true;
+      }
+
+      if (dirty) {
+        fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), "utf-8");
       }
       return parsed;
     } catch (e) {
@@ -227,6 +268,35 @@ function initializeDatabase(): DatabaseSchema {
       }
     ],
     settings: DEFAULT_SETTINGS,
+    dashboardRows: [
+      {
+        id: "db_row_1",
+        category: "Tech & Gadgets Blogs",
+        da: "55",
+        dr: "60",
+        price: 1500,
+        status: "Available",
+        createdAt: new Date("2026-06-20T10:00:00Z").toISOString()
+      },
+      {
+        id: "db_row_2",
+        category: "Business & Finance News",
+        da: "62",
+        dr: "65",
+        price: 2500,
+        status: "Available",
+        createdAt: new Date("2026-06-21T11:00:00Z").toISOString()
+      },
+      {
+        id: "db_row_3",
+        category: "Health & Wellness Sites",
+        da: "48",
+        dr: "50",
+        price: 1200,
+        status: "Available",
+        createdAt: new Date("2026-06-22T12:00:00Z").toISOString()
+      }
+    ],
   };
 
   fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), "utf-8");
@@ -333,5 +403,40 @@ export const db = {
     dbData.settings = { ...dbData.settings, ...updates };
     flush();
     return dbData.settings;
+  },
+
+  // --- DASHBOARD ROWS ---
+  getDashboardRows: (): DashboardRow[] => {
+    if (!dbData.dashboardRows) {
+      dbData.dashboardRows = [];
+    }
+    return dbData.dashboardRows;
+  },
+  createDashboardRow: (row: DashboardRow): void => {
+    if (!dbData.dashboardRows) {
+      dbData.dashboardRows = [];
+    }
+    dbData.dashboardRows.push(row);
+    flush();
+  },
+  updateDashboardRow: (id: string, updates: Partial<DashboardRow>): DashboardRow | null => {
+    if (!dbData.dashboardRows) {
+      dbData.dashboardRows = [];
+    }
+    const idx = dbData.dashboardRows.findIndex(r => r.id === id);
+    if (idx === -1) return null;
+    dbData.dashboardRows[idx] = { ...dbData.dashboardRows[idx], ...updates };
+    flush();
+    return dbData.dashboardRows[idx];
+  },
+  deleteDashboardRow: (id: string): boolean => {
+    if (!dbData.dashboardRows) {
+      dbData.dashboardRows = [];
+      return false;
+    }
+    const initialLen = dbData.dashboardRows.length;
+    dbData.dashboardRows = dbData.dashboardRows.filter(r => r.id !== id);
+    flush();
+    return dbData.dashboardRows.length < initialLen;
   }
 };

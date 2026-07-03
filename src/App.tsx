@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { AlertCircle } from "lucide-react";
 import Login from "./components/Login.js";
 import UserDashboard from "./components/UserDashboard.js";
 import AdminDashboard from "./components/AdminDashboard.js";
@@ -39,6 +40,13 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
+  const [globalAlert, setGlobalAlert] = useState<{ show: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    window.alert = (message: string) => {
+      setGlobalAlert({ show: true, message });
+    };
+  }, []);
 
   useEffect(() => {
     // Initial data pipeline load
@@ -120,25 +128,54 @@ export default function App() {
     );
   }
 
+  const renderAlertModal = () => {
+    if (!globalAlert || !globalAlert.show) return null;
+    return (
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in" id="global-alert-modal">
+        <div className="bg-white rounded-3xl p-6 max-w-sm w-full border border-slate-200/85 shadow-2xl animate-zoom-in text-center space-y-4">
+          <div className="mx-auto w-12 h-12 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+            <AlertCircle size={22} className="animate-pulse" />
+          </div>
+          <div className="space-y-1.5">
+            <h4 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider">Notification</h4>
+            <p className="text-xs text-slate-600 font-semibold leading-relaxed">{globalAlert.message}</p>
+          </div>
+          <button
+            onClick={() => setGlobalAlert(null)}
+            className="w-full py-2.5 px-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md active:scale-95 cursor-pointer"
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const isAdminPath = window.location.pathname === "/webacklinks-admin";
 
   if (!user || !token) {
     return (
-      <Login 
-        onLoginSuccess={handleLoginSuccess} 
-        websiteName={settings.websiteName} 
-        isAdminView={isAdminPath}
-      />
+      <>
+        <Login 
+          onLoginSuccess={handleLoginSuccess} 
+          websiteName={settings.websiteName} 
+          isAdminView={isAdminPath}
+        />
+        {renderAlertModal()}
+      </>
     );
   }
 
   if (user.role !== "admin" && isAdminPath) {
     return (
-      <Login 
-        onLoginSuccess={handleLoginSuccess} 
-        websiteName={settings.websiteName} 
-        isAdminView={true}
-      />
+      <>
+        <Login 
+          onLoginSuccess={handleLoginSuccess} 
+          websiteName={settings.websiteName} 
+          isAdminView={true}
+        />
+        {renderAlertModal()}
+      </>
     );
   }
 
@@ -147,24 +184,30 @@ export default function App() {
       window.history.replaceState(null, "", "/webacklinks-admin");
     }
     return (
-      <AdminDashboard
-        user={user}
-        token={token}
-        settings={settings}
-        onLogout={handleLogout}
-        onUpdateSettings={handleUpdateSettings}
-        onUpdateUser={handleUpdateUser}
-      />
+      <>
+        <AdminDashboard
+          user={user}
+          token={token}
+          settings={settings}
+          onLogout={handleLogout}
+          onUpdateSettings={handleUpdateSettings}
+          onUpdateUser={handleUpdateUser}
+        />
+        {renderAlertModal()}
+      </>
     );
   }
 
   return (
-    <UserDashboard
-      user={user}
-      token={token}
-      settings={settings}
-      onLogout={handleLogout}
-      onUpdateUser={handleUpdateUser}
-    />
+    <>
+      <UserDashboard
+        user={user}
+        token={token}
+        settings={settings}
+        onLogout={handleLogout}
+        onUpdateUser={handleUpdateUser}
+      />
+      {renderAlertModal()}
+    </>
   );
 }

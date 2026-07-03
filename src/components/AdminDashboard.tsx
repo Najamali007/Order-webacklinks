@@ -32,9 +32,10 @@ import {
   Briefcase,
   Download,
   HelpCircle,
-  Phone
+  Phone,
+  Table
 } from "lucide-react";
-import { User, Order, DepositRequest, AppSettings, BACKLINK_CATEGORIES } from "../types.js";
+import { User, Order, DepositRequest, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
 
 interface AdminDashboardProps {
@@ -48,13 +49,24 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ user, token, settings, onLogout, onUpdateSettings, onUpdateUser }: AdminDashboardProps) {
   // Navigation
-  const [activeTab, setActiveTab] = useState<"stats" | "users" | "deposits" | "orders" | "settings" | "profile">("stats");
+  const [activeTab, setActiveTab] = useState<"stats" | "users" | "deposits" | "orders" | "settings" | "profile" | "dashboard_data">("stats");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Raw Database states
   const [users, setUsers] = useState<User[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [deposits, setDeposits] = useState<DepositRequest[]>([]);
+
+  // Dashboard Rows States
+  const [dashboardRows, setDashboardRows] = useState<DashboardRow[]>([]);
+  const [dashboardSearch, setDashboardSearch] = useState("");
+  const [loadingDashboard, setLoadingDashboard] = useState<boolean>(true);
+  const [inventoryTab, setInventoryTab] = useState<"backlinks" | "guest_posts" | "premium">("backlinks");
+  const [showRowModal, setShowRowModal] = useState<boolean>(false);
+  const [selectedRow, setSelectedRow] = useState<DashboardRow | null>(null);
+  const [rowForm, setRowForm] = useState<{ category: string; da: string; dr: string; price: string | number; status: string; total: string; tab: string }>({ category: "", da: "30", dr: "30", price: "50", status: "Available", total: "", tab: "" });
+  const [rowError, setRowError] = useState("");
+  const [rowSubmitting, setRowSubmitting] = useState(false);
 
   // Search & Filters
   const [userSearch, setUserSearch] = useState("");
@@ -178,7 +190,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
   const [settingsError, setSettingsError] = useState("");
   const [settingsSuccess, setSettingsSuccess] = useState("");
   const [settingsSubmitting, setSettingsSubmitting] = useState(false);
-  const [activeSettingsSubTab, setActiveSettingsSubTab] = useState<"general" | "banks" | "categories">("general");
+  const [activeSettingsSubTab, setActiveSettingsSubTab] = useState<"general" | "banks" | "categories" | "custom_tabs">("general");
 
   // Admin Profile Form States
   const [profileName, setProfileName] = useState<string>(user.name);
@@ -246,6 +258,10 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
   useEffect(() => {
     setSettingsForm({ ...settings });
+    const tabs = settings?.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
+    if (tabs.length > 0) {
+      setInventoryTab(tabs[0]);
+    }
   }, [settings]);
 
   useEffect(() => {
@@ -277,18 +293,114 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
   const fetchAdminData = async () => {
     try {
+      setLoadingDashboard(true);
       const headers = { Authorization: `Bearer ${token}` };
-      const [usersRes, ordersRes, depositsRes] = await Promise.all([
+      const [usersRes, ordersRes, depositsRes, rowsRes] = await Promise.all([
         fetch("/api/admin/users", { headers }),
         fetch("/api/orders", { headers }),
         fetch("/api/deposits", { headers }),
+        fetch("/api/dashboard-rows", { headers }),
       ]);
 
       if (usersRes.ok) setUsers(await usersRes.json());
       if (ordersRes.ok) setOrders(await ordersRes.json());
       if (depositsRes.ok) setDeposits(await depositsRes.json());
+      if (rowsRes.ok) setDashboardRows(await rowsRes.json());
     } catch (e) {
       console.error("Failed to load admin databases:", e);
+    } finally {
+      setLoadingDashboard(false);
+    }
+  };
+
+  // --- DASHBOARD ROWS HANDLERS ---
+  const handleOpenRowModal = (row: DashboardRow | null = null) => {
+    setSelectedRow(row);
+    if (row) {
+      setRowForm({
+        category: row.category,
+        da: String(row.da),
+        dr: String(row.dr),
+        price: String(row.price || ""),
+        status: row.status || "",
+        total: row.total || "",
+        tab: row.tab || "Authority Backlinks"
+      });
+    } else {
+      setRowForm({
+        category: "",
+        da: "30",
+        dr: "30",
+        price: "50",
+        status: "Available",
+        total: "100",
+        tab: "Authority Backlinks"
+      });
+    }
+    setRowError("");
+    setShowRowModal(true);
+  };
+
+  const handleRowSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rowForm.category.trim()) {
+      setRowError("Please enter a category or niche name.");
+      return;
+    }
+    setRowSubmitting(true);
+    setRowError("");
+
+    try {
+      const method = selectedRow ? "PUT" : "POST";
+      const url = selectedRow 
+        ? `/api/admin/dashboard-rows/${selectedRow.id}` 
+        : "/api/admin/dashboard-rows";
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          category: rowForm.category.trim(),
+          da: String(rowForm.da).trim(),
+          dr: String(rowForm.dr).trim(),
+          price: isNaN(Number(rowForm.price)) ? String(rowForm.price).trim() : (rowForm.price === "" ? "" : Number(rowForm.price)),
+          status: rowForm.status.trim(),
+          total: String(rowForm.total).trim(),
+          tab: rowForm.tab.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save dashboard row");
+      }
+
+      setShowRowModal(false);
+      fetchAdminData();
+    } catch (err: any) {
+      setRowError(err.message || "An error occurred saving data.");
+    } finally {
+      setRowSubmitting(false);
+    }
+  };
+
+  const handleDeleteRow = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/dashboard-rows/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchAdminData();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to delete row.");
+      }
+    } catch (err: any) {
+      console.error(err);
     }
   };
 
@@ -404,27 +516,33 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
   // --- DEPOSIT REVIEW HANDLERS ---
   const handleReviewDeposit = async (id: string, status: "approved" | "rejected") => {
-    if (!window.confirm(`Are you sure you want to mark this deposit request as ${status}?`)) return;
+    triggerConfirm(
+      "Review Deposit Request",
+      `Are you sure you want to mark this deposit request as ${status}? This will directly adjust the user's wallet balance.`,
+      async () => {
+        try {
+          const res = await fetch(`/api/deposits/${id}/review`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ status }),
+          });
 
-    try {
-      const res = await fetch(`/api/deposits/${id}/review`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status }),
-      });
+          if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || "Failed to review deposit.");
+          }
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to review deposit.");
-      }
-
-      fetchAdminData();
-    } catch (err: any) {
-      alert(err.message);
-    }
+          fetchAdminData();
+        } catch (err: any) {
+          alert(err.message);
+        }
+      },
+      status === "rejected", // red warning icon for rejections, blue help for approvals
+      `Yes, ${status}`
+    );
   };
 
   // --- ORDER REVIEW HANDLERS ---
@@ -738,6 +856,76 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
     );
   };
 
+  // --- DYNAMIC TABS & FILE UPLOAD HANDLERS ---
+  const [newTabNameInput, setNewTabNameInput] = useState("");
+
+  const handleAddCustomTab = () => {
+    if (!newTabNameInput.trim()) return;
+    const currentTabs = settingsForm.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
+    if (currentTabs.includes(newTabNameInput.trim())) {
+      alert("This tab name already exists!");
+      return;
+    }
+    setSettingsForm({
+      ...settingsForm,
+      customTabs: [...currentTabs, newTabNameInput.trim()]
+    });
+    setNewTabNameInput("");
+  };
+
+  const handleRemoveCustomTab = (index: number) => {
+    const currentTabs = settingsForm.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
+    if (currentTabs.length <= 1) {
+      alert("You must keep at least one tab!");
+      return;
+    }
+    triggerConfirm(
+      "Delete Tab",
+      "Are you sure you want to delete this tab? New/existing rows matching this tab will need their tab assignment updated.",
+      () => {
+        const updated = currentTabs.filter((_, i) => i !== index);
+        setSettingsForm({
+          ...settingsForm,
+          customTabs: updated
+        });
+      }
+    );
+  };
+
+  const handleUpdateCustomTabField = (index: number, value: string) => {
+    const currentTabs = settingsForm.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
+    const updated = currentTabs.map((tab, i) => i === index ? value : tab);
+    setSettingsForm({
+      ...settingsForm,
+      customTabs: updated
+    });
+  };
+
+  const handleDomainListFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setSettingsForm({
+            ...settingsForm,
+            domainListFile: reader.result,
+            domainListFileName: file.name
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveDomainListFile = () => {
+    setSettingsForm({
+      ...settingsForm,
+      domainListFile: null,
+      domainListFileName: null
+    });
+  };
+
   // --- NOTIFICATION BADGE MATHS ---
   // Count pending orders grouped by user
   const userPendingOrdersMap = orders
@@ -845,6 +1033,17 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 {orders.filter(o => o.status === "pending").length}
               </span>
             )}
+          </button>
+
+          <button
+            id="admin-nav-dashboard-data"
+            onClick={() => setActiveTab("dashboard_data")}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs uppercase tracking-widest font-bold transition-all cursor-pointer ${
+              activeTab === "dashboard_data" ? "bg-blue-600 text-white shadow-md shadow-blue-500/10" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+          >
+            <Table size={14} />
+            <span>Dashboard Data</span>
           </button>
 
            <button
@@ -981,6 +1180,16 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
             </button>
 
             <button
+              onClick={() => { setActiveTab("dashboard_data"); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center gap-3 p-3.5 rounded-xl text-xs uppercase tracking-widest font-bold ${
+                activeTab === "dashboard_data" ? "bg-blue-50 text-blue-600 border border-blue-100" : "text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              <Table size={14} />
+              <span>Dashboard Data</span>
+            </button>
+
+            <button
               onClick={() => { setActiveTab("settings"); setMobileMenuOpen(false); }}
               className={`w-full flex items-center gap-3 p-3.5 rounded-xl text-xs uppercase tracking-widest font-bold ${
                 activeTab === "settings" ? "bg-blue-50 text-blue-600 border border-blue-100" : "text-slate-500 hover:bg-slate-50"
@@ -1090,6 +1299,291 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
         {/* VIEWPORT CANVAS */}
         <main className="flex-1 overflow-y-auto p-6 md:p-8 lg:p-10 bg-slate-50 text-slate-700">
+        {/* --- TAB: DASHBOARD DATA MANAGEMENT --- */}
+        {activeTab === "dashboard_data" && (() => {
+          const table1Rows = (dashboardRows || []).filter(r => {
+            const catLower = r.category.toLowerCase();
+            const isGuestOrPremium = 
+              (r.tab && (r.tab.toLowerCase().includes("guest") || r.tab.toLowerCase().includes("premium"))) ||
+              catLower.includes("guest") || 
+              catLower.includes("premium");
+
+            if (isGuestOrPremium) return false;
+
+            return (
+              r.category.toLowerCase().includes(dashboardSearch.toLowerCase()) ||
+              (r.da && String(r.da).toLowerCase().includes(dashboardSearch.toLowerCase()))
+            );
+          });
+
+          const table2Rows = (dashboardRows || []).filter(r => {
+            const catLower = r.category.toLowerCase();
+            const isGuestOrPremium = 
+              (r.tab && (r.tab.toLowerCase().includes("guest") || r.tab.toLowerCase().includes("premium"))) ||
+              catLower.includes("guest") || 
+              catLower.includes("premium");
+
+            if (!isGuestOrPremium) return false;
+
+            return (
+              r.category.toLowerCase().includes(dashboardSearch.toLowerCase()) ||
+              (r.da && String(r.da).toLowerCase().includes(dashboardSearch.toLowerCase()))
+            );
+          });
+
+          return (
+            <div className="space-y-8 animate-fade-in">
+              {/* Header */}
+              <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-lg font-extrabold text-slate-900 tracking-tight">Dashboard Inventory Manager</h1>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Control the live domain inventory displayed on both Authority Backlinks and High DA Guest Posts tables.
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleOpenRowModal(null)}
+                  className="inline-flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-3.5 py-1.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shadow-sm transition-all cursor-pointer active:scale-95 shrink-0"
+                >
+                  <Plus size={12} />
+                  <span>Add New Domain Niche</span>
+                </button>
+              </div>
+
+              {/* Filters & Search */}
+              <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-2xs flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-slate-600">
+                    Live Record Pools ({table1Rows.length + table2Rows.length} total)
+                  </span>
+                </div>
+                <div className="w-full sm:w-72">
+                  <input
+                    type="text"
+                    placeholder="Search by category name or DA..."
+                    value={dashboardSearch}
+                    onChange={(e) => setDashboardSearch(e.target.value)}
+                    className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500/80 transition-all shadow-2xs"
+                  />
+                </div>
+              </div>
+
+              {loadingDashboard ? (
+                <div className="py-20 bg-white rounded-3xl border border-slate-200/80 flex flex-col items-center justify-center gap-3">
+                  <div className="w-6 h-6 border-2 border-blue-600/20 border-t-blue-600 rounded-full animate-spin" />
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Loading dashboard rows...</p>
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {/* TABLE 1: AUTHORITY BACKLINKS */}
+                  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                      <h2 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                        Authority Backlinks
+                      </h2>
+                      <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-mono">
+                        {table1Rows.length} Items
+                      </span>
+                    </div>
+
+                    {table1Rows.length === 0 ? (
+                      <div className="py-10 text-center text-slate-400 italic text-xs">
+                        No backlinks niches found matching search criteria.
+                      </div>
+                    ) : (
+                      <div className="w-full overflow-x-auto">
+                        <table className="w-full text-left border-collapse table-fixed min-w-[700px]">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50/20 text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono">
+                              <th className="px-3 py-2.5 text-center w-[6%]">#</th>
+                              <th className="px-3 py-2.5 w-[42%]">Domain Category</th>
+                              <th className="px-3 py-2.5 text-center w-[12%]">DA</th>
+                              <th className="px-3 py-2.5 text-center w-[18%]">Price</th>
+                              <th className="px-3 py-2.5 text-center w-[10%]">Total</th>
+                              <th className="px-3 py-2.5 text-center w-[12%]">Status</th>
+                              <th className="px-3 py-2.5 text-center w-[10%]">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {table1Rows.map((row, idx) => (
+                              <tr key={row.id} className="hover:bg-slate-50/50 transition-colors text-xs font-medium text-slate-700">
+                                <td className="px-3 py-2 font-mono text-slate-400 text-center truncate">{idx + 1}</td>
+                                <td className="px-3 py-2 font-bold text-slate-900 truncate" title={row.category}>{row.category}</td>
+                                <td className="px-3 py-2 text-center">
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-bold font-mono text-[10px] md:text-[11px] border border-indigo-100/50">
+                                    {row.da}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-center font-black text-slate-900 font-mono text-xs truncate">
+                                  {row.price && String(row.price).trim() !== "" ? (
+                                    <span className="inline-block truncate">
+                                      {row.price} <span className="text-red-600 font-extrabold">Cr</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center font-bold text-slate-800 font-mono text-[11px] truncate">
+                                  {row.total && String(row.total).trim() !== "" ? row.total : <span className="text-slate-400 font-normal italic">-</span>}
+                                </td>
+                                <td className="px-3 py-2 text-center font-bold">
+                                  {row.status ? (
+                                    String(row.status).toLowerCase().includes("coming soon") ? (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] border border-amber-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        {row.status}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] border border-emerald-100/50 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        {row.status}
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-400 text-[10px] border border-slate-200/50 italic truncate max-w-full">
+                                      Hidden
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  <div className="flex justify-center items-center gap-1">
+                                    <button
+                                      onClick={() => handleOpenRowModal(row)}
+                                      className="p-1 bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white border border-blue-100 hover:border-blue-600 rounded-md transition-all cursor-pointer"
+                                      title="Edit Row"
+                                    >
+                                      <Edit3 size={11} />
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        triggerConfirm(
+                                          "Delete Domain Record",
+                                          `Are you sure you want to permanently delete "${row.category}"?`,
+                                          () => handleDeleteRow(row.id),
+                                          true,
+                                          "Delete Record"
+                                        );
+                                      }}
+                                      className="p-1 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-100 hover:border-red-600 rounded-md transition-all cursor-pointer"
+                                      title="Delete Row"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* TABLE 2: HIGH DA GUEST POSTS */}
+                  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                      <h2 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                        High DA Guest Posts
+                      </h2>
+                      <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-mono">
+                        {table2Rows.length} Items
+                      </span>
+                    </div>
+
+                    {table2Rows.length === 0 ? (
+                      <div className="py-10 text-center text-slate-400 italic text-xs">
+                        No guest posts niches found matching search criteria.
+                      </div>
+                    ) : (
+                      <div className="w-full overflow-x-auto">
+                        <table className="w-full text-left border-collapse table-fixed min-w-[700px]">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50/20 text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono">
+                              <th className="px-3 py-2.5 text-center w-[6%]">#</th>
+                              <th className="px-3 py-2.5 w-[42%]">Domain Category / Blog Topic</th>
+                              <th className="px-3 py-2.5 text-center w-[12%]">DA</th>
+                              <th className="px-3 py-2.5 text-center w-[18%]">Price</th>
+                              <th className="px-3 py-2.5 text-center w-[10%]">Total</th>
+                              <th className="px-3 py-2.5 text-center w-[12%]">Status</th>
+                              <th className="px-3 py-2.5 text-center w-[10%]">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {table2Rows.map((row, idx) => (
+                              <tr key={row.id} className="hover:bg-slate-50/50 transition-colors text-xs font-medium text-slate-700">
+                                <td className="px-3 py-2 font-mono text-slate-400 text-center truncate">{idx + 1}</td>
+                                <td className="px-3 py-2 font-bold text-slate-900 truncate" title={row.category}>{row.category}</td>
+                                <td className="px-3 py-2 text-center">
+                                  <span className="inline-block px-1.5 py-0.5 font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-md text-[10px]">
+                                    {row.da}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-center font-black text-slate-900 font-mono text-xs truncate">
+                                  {row.price && String(row.price).trim() !== "" ? (
+                                    <span className="inline-block truncate">
+                                      {row.price} <span className="text-red-600 font-extrabold">Cr</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">-</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center font-bold text-slate-800 font-mono text-[11px] truncate">
+                                  {row.total && String(row.total).trim() !== "" ? row.total : <span className="text-slate-400 font-normal italic">-</span>}
+                                </td>
+                                <td className="px-3 py-2 text-center font-bold">
+                                  {row.status ? (
+                                    String(row.status).toLowerCase().includes("coming soon") ? (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] border border-amber-100 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        {row.status}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] border border-emerald-100/50 uppercase tracking-wide truncate max-w-full" title={row.status}>
+                                        {row.status}
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-400 text-[10px] border border-slate-200/50 italic truncate max-w-full">
+                                      Hidden
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  <div className="flex justify-center items-center gap-1">
+                                    <button
+                                      onClick={() => handleOpenRowModal(row)}
+                                      className="p-1 bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white border border-blue-100 hover:border-blue-600 rounded-md transition-all cursor-pointer"
+                                      title="Edit Row"
+                                    >
+                                      <Edit3 size={11} />
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        triggerConfirm(
+                                          "Delete Domain Record",
+                                          `Are you sure you want to permanently delete "${row.category}"?`,
+                                          () => handleDeleteRow(row.id),
+                                          true,
+                                          "Delete Record"
+                                        );
+                                      }}
+                                      className="p-1 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-100 hover:border-red-600 rounded-md transition-all cursor-pointer"
+                                      title="Delete Row"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* --- TAB: STATS OVERVIEW --- */}
         {activeTab === "stats" && (
           <div className="space-y-8 animate-fade-in">
@@ -1781,6 +2275,17 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
               >
                 📋 Custom Packages ({settingsForm.categories?.length || 0})
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveSettingsSubTab("custom_tabs")}
+                className={`py-2.5 px-5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                  activeSettingsSubTab === "custom_tabs"
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                📁 Dynamic Tabs & Domain List
+              </button>
             </div>
 
             <form onSubmit={handleSaveSettings} className="space-y-8">
@@ -2024,6 +2529,135 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 </div>
               )}
 
+              {activeSettingsSubTab === "custom_tabs" && (
+                <div className="space-y-6">
+                  {/* Card 1: Dynamic Tabs Manager */}
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-5">
+                    <div className="border-b border-slate-100 pb-3">
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800">Dynamic Inventory Tabs Manager</h3>
+                      <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                        Configure the horizontal tabs that appear on the client dashboard. Users can click these to filter the active domains list.
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Add new tab name (e.g. Premium Guest Post, PBN, Educational)"
+                        value={newTabNameInput}
+                        onChange={(e) => setNewTabNameInput(e.target.value)}
+                        className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCustomTab}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        Add Tab
+                      </button>
+                    </div>
+
+                    {(!(settingsForm.customTabs) || settingsForm.customTabs.length === 0) ? (
+                      <div className="p-4 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+                        No custom tabs defined. Defaults will be loaded.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {settingsForm.customTabs.map((tab, idx) => (
+                          <div key={idx} className="flex gap-3 items-center bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                            <span className="text-[10px] font-bold font-mono text-slate-400 w-6">#{idx + 1}</span>
+                            <input
+                              type="text"
+                              value={tab}
+                              onChange={(e) => handleUpdateCustomTabField(idx, e.target.value)}
+                              className="flex-1 px-3 py-1.5 rounded-md bg-white border border-slate-200 text-xs text-slate-800 font-semibold focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCustomTab(idx)}
+                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Tab"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card 2: Export Domains File Upload & Link */}
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-5">
+                    <div className="border-b border-slate-100 pb-3">
+                      <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800">Export Domains List Attachment</h3>
+                      <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                        Upload an official file (Excel/CSV/PDF) or provide an external Google Sheet link that users can download or open directly when clicking "Export Domains List".
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* File Upload */}
+                      <div className="space-y-3">
+                        <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500">
+                          Upload Inventory File
+                        </label>
+                        {settingsForm.domainListFileName ? (
+                          <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <CheckCircle size={16} className="text-emerald-600 flex-shrink-0" />
+                              <span className="text-xs text-slate-700 font-semibold font-mono truncate">
+                                {settingsForm.domainListFileName}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleRemoveDomainListFile}
+                              className="text-[10px] font-bold text-red-600 hover:text-red-800 uppercase tracking-wider cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="border-2 border-dashed border-slate-200 hover:border-blue-500 rounded-xl p-4 transition-colors relative cursor-pointer group">
+                            <input
+                              type="file"
+                              accept=".csv,.xlsx,.xls,.pdf,.txt"
+                              onChange={handleDomainListFileChange}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                            <div className="text-center space-y-1.5">
+                              <div className="text-xs text-slate-600 font-bold group-hover:text-blue-600 transition-colors">
+                                Click or drag file to attach
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                Excel, CSV, PDF or Text files (Max 5MB)
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Google Sheet Link */}
+                      <div className="space-y-3">
+                        <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500">
+                          Google Sheet or External Link
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://docs.google.com/spreadsheets/d/..."
+                          value={settingsForm.domainListUrl || ""}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, domainListUrl: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                        />
+                        <p className="text-[10px] text-slate-400">
+                          If provided, clients can click to open this link to view the complete live inventory list instantly.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={settingsSubmitting}
@@ -2206,7 +2840,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
       {/* --- MODAL: EDIT USER --- */}
       {showUserModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-fade-in backdrop-blur-xs">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="edit-user-modal">
           <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 md:p-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-5">
               <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800">Edit User Details</h3>
@@ -2287,7 +2921,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
       {/* --- MODAL: BALANCE ADJUSTMENT --- */}
       {showCreditModal && selectedUser && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-fade-in backdrop-blur-xs">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="balance-adjustment-modal">
           <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 md:p-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-5">
               <div>
@@ -2361,7 +2995,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
       {/* --- MODAL: SECURITY AUTHORIZATION CODE FOR DELETION --- */}
       {showDeleteVerificationModal && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="security-verification-modal">
           <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden">
             <div className="bg-red-600 text-white px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -2446,7 +3080,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
       {/* --- MODAL: COMPLETE DELIVERY REPORT --- */}
       {showCompleteModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-fade-in backdrop-blur-xs">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="complete-delivery-modal">
           <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 md:p-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-5">
               <div>
@@ -2530,7 +3164,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
         </div>
       )}
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4 animate-fade-in backdrop-blur-xs">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[10000] p-4 animate-fade-in" id="confirmation-dialog-modal">
           <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 md:p-8">
             <div className="flex flex-col items-center text-center space-y-4">
               <div className={`p-4 rounded-full ${confirmIsDanger ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-blue-50 text-blue-600 border border-blue-100'}`}>
@@ -2575,7 +3209,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
       {/* --- MODAL: CAMPAIGN ORDER DETAILS & PREVIEW --- */}
       {showDetailsModal && selectedOrderDetails && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="order-details-modal">
           <div className="w-full max-w-2xl bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             {/* Modal Header */}
             <div className="bg-slate-950 text-white px-6 py-4 flex items-center justify-between">
@@ -2698,6 +3332,161 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 Close Details
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL: ADD / EDIT INVENTORY ROW --- */}
+      {showRowModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="add-edit-row-modal">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                  {selectedRow ? "Edit Domain record" : "Add New Domain record"}
+                </h3>
+                <p className="text-[10px] text-slate-400 mt-1 uppercase font-mono font-bold">
+                  {selectedRow ? `Row ID: ${selectedRow.id}` : "Configure niche metrics & price"}
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowRowModal(false)} 
+                className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer p-1 rounded-lg hover:bg-slate-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleRowSubmit}>
+              <div className="p-6 space-y-4">
+                {rowError && (
+                  <div className="p-3 bg-red-50 border border-red-200 text-xs text-red-700 font-mono rounded-lg">
+                    {rowError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                    Domain Category / Niche Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Technology, Health, Fashion, Web 2.0"
+                    value={rowForm.category}
+                    onChange={(e) => setRowForm({ ...rowForm, category: e.target.value })}
+                    className="w-full px-4 py-2.5 text-xs font-semibold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                      Domain Authority (DA)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 50 or custom text"
+                      value={rowForm.da}
+                      onChange={(e) => setRowForm({ ...rowForm, da: e.target.value })}
+                      className="w-full px-4 py-2.5 text-xs font-mono font-bold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                      Domain Rating (DR)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 60 or custom text"
+                      value={rowForm.dr}
+                      onChange={(e) => setRowForm({ ...rowForm, dr: e.target.value })}
+                      className="w-full px-4 py-2.5 text-xs font-mono font-bold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                    Unit Price (Cr)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 1500 or custom price"
+                    value={rowForm.price}
+                    onChange={(e) => setRowForm({ ...rowForm, price: e.target.value })}
+                    className="w-full px-4 py-2.5 text-xs font-mono font-bold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                    Domain Status (e.g. Available / Custom text. Leave blank to hide from users)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Available, High Quality, or custom status text"
+                    value={rowForm.status}
+                    onChange={(e) => setRowForm({ ...rowForm, status: e.target.value })}
+                    className="w-full px-4 py-2.5 text-xs font-semibold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                    Total (Any Text or Number)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 100 or Unlimited"
+                    value={rowForm.total}
+                    onChange={(e) => setRowForm({ ...rowForm, total: e.target.value })}
+                    className="w-full px-4 py-2.5 text-xs font-mono font-bold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-2">
+                    Destination Table / Category Tab
+                  </label>
+                  <select
+                    value={rowForm.tab}
+                    onChange={(e) => setRowForm({ ...rowForm, tab: e.target.value })}
+                    className="w-full px-4 py-2.5 text-xs font-semibold text-slate-800 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 focus:outline-none transition-all cursor-pointer bg-white"
+                  >
+                    <option value="Authority Backlinks">Authority Backlinks (Table 1)</option>
+                    <option value="High DA Guest Posts">High DA Guest Posts (Table 2)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowRowModal(false)}
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={rowSubmitting}
+                  className="px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-blue-400 disabled:to-indigo-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  {rowSubmitting ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Save size={13} />
+                      <span>{selectedRow ? "Save Changes" : "Create Record"}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

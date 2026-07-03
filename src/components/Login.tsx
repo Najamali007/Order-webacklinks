@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { LogIn, UserPlus, Phone, Mail, Lock, User as UserIcon, ShieldAlert, Eye, EyeOff } from "lucide-react";
+import { LogIn, UserPlus, Phone, Mail, Lock, User as UserIcon, ShieldAlert, Eye, EyeOff, Globe } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { User } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon, WeBacklinksOriginalLogo } from "./WeBacklinksLogo.js";
@@ -106,6 +106,18 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 overflow-x-hidden relative" id="login-container">
+      {/* Go to Main Website Link */}
+      <div className="absolute top-4 right-4 sm:top-5 sm:right-5 z-50">
+        <a
+          href="https://webacklinks.com/"
+          className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 py-1.5 sm:px-4 sm:py-2 bg-white/95 hover:bg-white text-slate-700 hover:text-blue-600 border border-slate-200 shadow-2xs hover:shadow-sm rounded-lg sm:rounded-xl text-[10px] sm:text-xs font-extrabold uppercase tracking-wider transition-all duration-200 cursor-pointer hover:-translate-y-0.5 active:translate-y-0 active:scale-95 backdrop-blur-md"
+        >
+          <Globe size={12} className="text-slate-500 transition-colors duration-200" />
+          <span className="hidden sm:inline">Go to Main Website</span>
+          <span className="inline sm:hidden">Website</span>
+        </a>
+      </div>
+
       {/* Decorative animated floating particles in background */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
         <motion.div
