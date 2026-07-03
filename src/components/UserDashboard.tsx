@@ -1294,42 +1294,42 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wider">Campaign Tools</span>
               </div>
               
-              <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
-                {/* Place New Order */}
+              <div className="grid grid-cols-3 sm:flex sm:flex-row items-center gap-1.5 w-full sm:w-auto">
+                {/* New Order */}
                 <button
                   onClick={() => setActiveTab("order")}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95"
+                  className="inline-flex items-center justify-center gap-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg text-[9px] xs:text-[10px] md:text-xs font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95 text-center truncate"
                 >
-                  <PlusCircle size={12} />
-                  <span>Place New Order</span>
+                  <PlusCircle size={12} className="shrink-0" />
+                  <span>New Order</span>
                 </button>
 
                 {/* Export Button */}
                 <button
                   onClick={handleExportCSV}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95"
+                  className="inline-flex items-center justify-center gap-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg text-[9px] xs:text-[10px] md:text-xs font-extrabold uppercase tracking-widest shadow-xs transition-all cursor-pointer active:scale-95 text-center truncate"
                 >
-                  <Download size={12} />
+                  <Download size={12} className="shrink-0" />
                   <span>Export</span>
                 </button>
 
-                {/* Copy Sheet Link Button */}
+                {/* Sheet Link Button */}
                 <button
                   onClick={() => {
                     const sheetLink = settings?.domainListUrl || `${window.location.origin}/api/dashboard-rows`;
                     handleCopyToClipboard(sheetLink, "inventory_copied");
                   }}
-                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80 px-2.5 py-1.5 rounded-lg text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest transition-all cursor-pointer active:scale-95"
+                  className="inline-flex items-center justify-center gap-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg text-[9px] xs:text-[10px] md:text-xs font-extrabold uppercase tracking-widest transition-all cursor-pointer active:scale-95 text-center truncate"
                 >
                   {copiedField === "inventory_copied" ? (
                     <>
-                      <Check size={12} className="text-emerald-500 animate-bounce" />
+                      <Check size={12} className="text-emerald-500 animate-bounce shrink-0" />
                       <span className="text-emerald-600 font-extrabold">Copied!</span>
                     </>
                   ) : (
                     <>
-                      <Link2 size={12} className="text-slate-500" />
-                      <span>Copy Link</span>
+                      <Link2 size={12} className="text-slate-500 shrink-0" />
+                      <span>Sheet Link</span>
                     </>
                   )}
                 </button>
@@ -1645,7 +1645,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
               {/* Spent Card */}
               <div className="p-6 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white flex flex-col justify-center items-center group cursor-pointer hover:brightness-105 transition-all shadow-md hover:scale-[1.01] border-transparent" onClick={() => setActiveTab("order")}>
-                <span className="text-xs uppercase tracking-widest font-bold text-white mb-1">+ Place New Order</span>
+                <span className="text-xs uppercase tracking-widest font-bold text-white mb-1">+ New Order</span>
                 <span className="text-[10px] text-blue-100/80 text-center font-sans">Deploy automated premium campaign</span>
               </div>
             </div>
