@@ -37,7 +37,10 @@ import {
   Phone,
   Table,
   Link2,
-  Search
+  Search,
+  Edit,
+  Pencil,
+  Trash2
 } from "lucide-react";
 import { User, Order, DepositRequest, Notification, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
@@ -84,7 +87,15 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
   // Top Bar Modals & Dropdown States
   const [showBankModal, setShowBankModal] = useState<boolean>(false);
   const [showTopUpModal, setShowTopUpModal] = useState<boolean>(false);
+  const [showInstantTopUpModal, setShowInstantTopUpModal] = useState<boolean>(false);
   const [showTodayOrdersDropdown, setShowTodayOrdersDropdown] = useState<boolean>(false);
+
+  // Instant Top Up States
+  const [instantAmount, setInstantAmount] = useState<string>("");
+  const [instantSubmitting, setInstantSubmitting] = useState<boolean>(false);
+  const [instantError, setInstantError] = useState<string>("");
+  const [showWrongAmountModal, setShowWrongAmountModal] = useState<boolean>(false);
+  const [wrongAmountError, setWrongAmountError] = useState<string>("");
 
   // Deposit Form
   const [depositAmount, setDepositAmount] = useState<string>("");
@@ -103,6 +114,18 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
   const [profileSuccess, setProfileSuccess] = useState<string>("");
   const [profileError, setProfileError] = useState<string>("");
   const [profileSubmitting, setProfileSubmitting] = useState<boolean>(false);
+
+  // User Bank Details States
+  const [userBankName, setUserBankName] = useState<string>(user.userBankName || "");
+  const [userAccountTitle, setUserAccountTitle] = useState<string>(user.userAccountTitle || "");
+  const [userAccountNumber, setUserAccountNumber] = useState<string>(user.userAccountNumber || "");
+  const [bankSuccess, setBankSuccess] = useState<string>("");
+  const [bankError, setBankError] = useState<string>("");
+  const [bankSubmitting, setBankSubmitting] = useState<boolean>(false);
+  const [isEditingBank, setIsEditingBank] = useState<boolean>(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+  const [bankDeleting, setBankDeleting] = useState<boolean>(false);
+  const hasBankDetails = !!(user.userBankName?.trim() && user.userAccountTitle?.trim() && user.userAccountNumber?.trim());
 
   // Congrats Success Modal States
   const [showCongratsModal, setShowCongratsModal] = useState<boolean>(false);
@@ -228,6 +251,98 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
     }
   };
 
+  const handleBankDetailsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBankError("");
+    setBankSuccess("");
+    setBankSubmitting(true);
+
+    try {
+      const res = await fetch("/api/users/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: profileName || user.name,
+          phone: profilePhone || user.phone,
+          avatar: profileAvatar || user.avatar,
+          userBankName,
+          userAccountTitle,
+          userAccountNumber,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update bank details.");
+      }
+
+      setBankSuccess("🎉 Your payment bank account details have been updated successfully!");
+      setIsEditingBank(false);
+      onUpdateUser(data.user);
+      setTimeout(() => setBankSuccess(""), 4000);
+    } catch (err: any) {
+      setBankError(err.message);
+    } finally {
+      setBankSubmitting(false);
+    }
+  };
+
+  const handleBankDetailsDelete = async () => {
+    setBankError("");
+    setBankSuccess("");
+    setBankDeleting(true);
+
+    try {
+      const res = await fetch("/api/users/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: profileName || user.name,
+          phone: profilePhone || user.phone,
+          avatar: profileAvatar || user.avatar,
+          userBankName: "",
+          userAccountTitle: "",
+          userAccountNumber: "",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete bank details.");
+      }
+
+      setBankSuccess("🗑️ Your payment bank account details have been deleted successfully.");
+      setIsEditingBank(false);
+      setUserBankName("");
+      setUserAccountTitle("");
+      setUserAccountNumber("");
+      onUpdateUser(data.user);
+      setTimeout(() => setBankSuccess(""), 4000);
+    } catch (err: any) {
+      setBankError(err.message);
+    } finally {
+      setBankDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  const handleConfigureBankClick = () => {
+    setShowBankModal(false);
+    setActiveTab("profile");
+    setTimeout(() => {
+      const element = document.getElementById("bank-details-section");
+      if (element) {
+        element.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+  };
+
   // Auto calculate order costs
   const activeCatItem = (settings.categories || []).find(c => c.name === orderCategory);
   const priceEach = activeCatItem ? activeCatItem.price : (settings.prices[orderCategory] || 10);
@@ -289,16 +404,44 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
     }
   }, [activeTab]);
 
-  const fetchUserData = async () => {
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchUserData(true);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  useEffect(() => {
+    if (activeTab !== "profile") {
+      setProfileName(user.name);
+      setProfilePhone(user.phone);
+      setProfileAvatar(user.avatar || "");
+    }
+  }, [user, activeTab]);
+
+  useEffect(() => {
+    setUserBankName(user.userBankName || "");
+    setUserAccountTitle(user.userAccountTitle || "");
+    setUserAccountNumber(user.userAccountNumber || "");
+  }, [user.userBankName, user.userAccountTitle, user.userAccountNumber]);
+
+  useEffect(() => {
+    if (showInstantTopUpModal || showTopUpModal) {
+      fetchUserData();
+    }
+  }, [showInstantTopUpModal, showTopUpModal]);
+
+  const fetchUserData = async (silent: boolean = false) => {
     try {
-      setLoadingTable(true);
+      if (!silent) setLoadingTable(true);
       const headers = { Authorization: `Bearer ${token}` };
       
-      const [ordersRes, depositsRes, notifsRes, tableRes] = await Promise.all([
+      const [ordersRes, depositsRes, notifsRes, tableRes, meRes] = await Promise.all([
         fetch("/api/orders", { headers }),
         fetch("/api/deposits", { headers }),
         fetch("/api/notifications", { headers }),
         fetch("/api/dashboard-rows", { headers }),
+        fetch("/api/auth/me", { headers }),
       ]);
 
       if (ordersRes.ok) setOrders(await ordersRes.json());
@@ -311,10 +454,16 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           setCalcCategory(rows[0].category);
         }
       }
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        if (meData.user) {
+          onUpdateUser(meData.user);
+        }
+      }
     } catch (e) {
       console.error("Failed to load user data logs:", e);
     } finally {
-      setLoadingTable(false);
+      if (!silent) setLoadingTable(false);
     }
   };
 
@@ -433,17 +582,12 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
       return;
     }
 
-    if (!depositTxn.trim()) {
-      setDepositError("Transaction ID is required to audit the payment manually.");
-      return;
-    }
-
     setDepositSubmitting(true);
 
     const formData = new FormData();
     formData.append("amount", depositAmount);
     formData.append("paymentMethod", depositMethod);
-    formData.append("transactionId", depositTxn);
+    formData.append("transactionId", depositTxn || "N/A");
     if (depositFile) {
       formData.append("screenshot", depositFile);
     }
@@ -463,7 +607,6 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
         data = await res.json();
       } else {
         const text = await res.text();
-        // Extract readable text if it is HTML (strip tags briefly or take first 150 chars)
         const isHtml = text.trim().startsWith("<");
         const cleanMessage = isHtml ? `Server error (Status ${res.status}): Please make sure all details and screenshots are correct.` : text;
         throw new Error(cleanMessage || `Request failed with status code ${res.status}`);
@@ -482,7 +625,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
       // Open Congrats Modal with detailed message
       setCongratsType("deposit");
-      setCongratsDetails(`Your wallet deposit request for ${settings.currency} ${parseFloat(depositAmount || "0").toLocaleString()} (Txn ID: ${depositTxn}) has been logged successfully! The finance auditing team will inspect your receipt proof and add credits to your wallet instantly.`);
+      const txnDisplay = depositTxn ? `Txn ID: ${depositTxn}` : "No TID provided";
+      setCongratsDetails(`Your wallet deposit request for ${settings.currency} ${parseFloat(depositAmount || "0").toLocaleString()} (${txnDisplay}) has been logged successfully! The finance auditing team will inspect your payment details and add credits to your wallet instantly.`);
       setShowCongratsModal(true);
 
       // Soft refresh in the background so they see updated status instantly
@@ -497,6 +641,78 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
       setDepositError(err.message);
     } finally {
       setDepositSubmitting(false);
+    }
+  };
+
+  const handleInstantTopUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setInstantError("");
+
+    const parsedAmount = parseFloat(instantAmount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setInstantError("Please enter a valid deposit amount.");
+      return;
+    }
+
+    const approvedLimit = user.approvedTopUpAmount || 0;
+    if (parsedAmount > approvedLimit) {
+      setWrongAmountError(`You have entered an incorrect amount. Your approved top up limit is ${settings.currency} ${approvedLimit.toLocaleString()}.`);
+      setShowWrongAmountModal(true);
+      return;
+    }
+
+    setInstantSubmitting(true);
+
+    try {
+      const res = await fetch("/api/users/instant-topup", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ amount: instantAmount }),
+      });
+
+      let data;
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Request failed with status ${res.status}`);
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || "Instant top up failed.");
+      }
+
+      setInstantAmount("");
+      
+      // Close instant top up modal
+      setShowInstantTopUpModal(false);
+
+      // Open Congrats Modal with detailed message
+      setCongratsType("deposit");
+      setCongratsDetails(`Your wallet has been topped up successfully with ${settings.currency} ${parsedAmount.toLocaleString()}!`);
+      setShowCongratsModal(true);
+
+      // Call onUpdateUser to update user balance in state
+      if (data.user) {
+        onUpdateUser(data.user);
+      }
+
+      // Soft refresh in the background
+      fetchUserData();
+
+      // Automatically hide the congrats modal after 3 seconds and return to dashboard hub
+      setTimeout(() => {
+        setShowCongratsModal(false);
+        setActiveTab("dashboard");
+      }, 3000);
+    } catch (err: any) {
+      setInstantError(err.message);
+    } finally {
+      setInstantSubmitting(false);
     }
   };
 
@@ -664,6 +880,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               <UserIcon size={13} />
               <span>My Profile</span>
             </button>
+
+
           </div>
         </nav>
 
@@ -756,13 +974,17 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           <div className="grid grid-cols-2 gap-3 mb-5">
             <button
               onClick={() => { setShowBankModal(true); setMobileMenuOpen(false); }}
-              className="flex items-center justify-center gap-2 py-2.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all shadow-xs"
+              className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all shadow-xs border ${
+                hasBankDetails
+                  ? "bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200"
+                  : "bg-red-50 hover:bg-red-100 text-red-700 border-red-200 animate-pulse"
+              }`}
             >
-              <Landmark size={14} className="text-slate-600" />
-              <span>Bank Details</span>
+              <Landmark size={14} className={hasBankDetails ? "text-slate-600" : "text-red-600"} />
+              <span>Add Fund</span>
             </button>
             <button
-              onClick={() => { setShowTopUpModal(true); setMobileMenuOpen(false); }}
+              onClick={() => { setShowInstantTopUpModal(true); setMobileMenuOpen(false); }}
               className="flex items-center justify-center gap-2 py-2.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all shadow-xs"
             >
               <PlusCircle size={14} className="text-blue-600 animate-pulse" />
@@ -853,6 +1075,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 <UserIcon size={13} />
                 <span>My Profile</span>
               </button>
+
             </div>
           </nav>
 
@@ -896,40 +1119,41 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
       {/* DESKTOP CONTENT COLUMN */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* DESKTOP TOP HEADER BAR */}
-        <header className="hidden md:flex items-center justify-between bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-30 shadow-xs">
-          <div className="flex-none min-w-[180px]">
-            <span className="text-xs uppercase tracking-widest text-slate-400 font-bold font-mono">
-              {activeTab === "dashboard" && "🚀 Client Dashboard"}
-              {activeTab === "order" && "✨ Place New Backlink Order"}
-              {activeTab === "deposit" && "💳 Deposit Wallet Credits"}
-              {activeTab === "history" && "📝 Order & Credit History"}
-              {activeTab === "profile" && "👤 My Profile & Account"}
-            </span>
-          </div>
-
-          {/* Centered Top Bar matching screenshot exactly */}
-          <div className="flex-1 flex items-center justify-center gap-6 lg:gap-8 border-x border-slate-100 px-6 mx-6">
-            {/* 1. Bank Details */}
+        <header className="hidden md:flex items-center justify-between bg-white border-b border-slate-200 px-6 lg:px-8 py-4 sticky top-0 z-30 shadow-xs">
+          {/* Main Top Bar Actions - Left Aligned */}
+          <div className="flex-1 flex flex-wrap items-center gap-4 lg:gap-6">
+            {/* 1. Add Fund */}
             <button
               onClick={() => setShowBankModal(true)}
-              className="flex items-center gap-2 text-slate-800 hover:text-blue-600 transition-all font-semibold text-xs cursor-pointer group"
+              className={`flex items-center gap-2 transition-all font-semibold text-xs cursor-pointer group shrink-0 ${
+                hasBankDetails
+                  ? "text-slate-800 hover:text-blue-600"
+                  : "text-red-600 hover:text-red-700 font-bold animate-pulse"
+              }`}
             >
-              <Landmark size={18} className="text-slate-800 group-hover:text-blue-600 transition-colors" />
-              <span className="underline decoration-slate-300 group-hover:decoration-blue-600">Bank Details</span>
+              <Landmark
+                size={16}
+                className={
+                  hasBankDetails
+                    ? "text-slate-800 group-hover:text-blue-600 transition-colors"
+                    : "text-red-600"
+                }
+              />
+              <span className={`underline ${
+                hasBankDetails
+                  ? "decoration-slate-300 group-hover:decoration-blue-600"
+                  : "decoration-red-400 group-hover:decoration-red-600"
+              }`}>
+                Add Fund
+              </span>
             </button>
 
-            {/* 2. Top Up */}
-            <button
-              onClick={() => setShowTopUpModal(true)}
-              className="flex items-center gap-2 text-slate-800 hover:text-blue-600 transition-all font-semibold text-xs cursor-pointer group"
-            >
-              <PlusCircle size={18} className="text-blue-600 group-hover:scale-105 transition-transform" />
-              <span className="underline decoration-slate-300 group-hover:decoration-blue-600 font-semibold text-blue-600">Top Up</span>
-            </button>
+            {/* Vertical Divider */}
+            <div className="w-px h-4 bg-slate-200 shrink-0" />
 
             {/* 3. Balance */}
-            <div className="flex items-center gap-2 font-semibold text-xs text-slate-800">
-              <Wallet size={18} className="text-blue-600" />
+            <div className="flex items-center gap-2 font-semibold text-xs text-slate-800 shrink-0">
+              <Wallet size={16} className="text-blue-600" />
               <span>
                 Balance:{" "}
                 <span className="font-bold text-slate-900">
@@ -938,20 +1162,24 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               </span>
             </div>
 
+            {/* Vertical Divider */}
+            <div className="w-px h-4 bg-slate-200 shrink-0" />
+
             {/* 4. Today's Orders Dropdown Trigger */}
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 onClick={() => setShowTodayOrdersDropdown(!showTodayOrdersDropdown)}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all text-xs font-semibold text-slate-800 cursor-pointer"
+                className="flex items-center gap-2 px-3 lg:px-4 py-1.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all text-xs font-semibold text-slate-800 cursor-pointer"
               >
-                <Clock size={16} className="text-slate-800" />
-                <span>Today's Orders ({todaysOrders.length})</span>
+                <Clock size={15} className="text-slate-800" />
+                <span className="hidden lg:inline">Today's Orders ({todaysOrders.length})</span>
+                <span className="inline lg:hidden">Orders ({todaysOrders.length})</span>
                 <ChevronDown size={14} className={`text-slate-500 transition-transform ${showTodayOrdersDropdown ? "rotate-180" : ""}`} />
               </button>
 
               {/* Today's Orders Popover Dropdown */}
               {showTodayOrdersDropdown && (
-                <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-100 py-3 z-50 animate-fade-in text-slate-700">
+                <div className="absolute left-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-100 py-3 z-50 animate-fade-in text-slate-700">
                   <div className="px-4 pb-2 border-b border-slate-100 flex items-center justify-between">
                     <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Today's Orders</span>
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-[9px] font-bold">{todaysOrders.length} placed</span>
@@ -990,20 +1218,22 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
             </div>
           </div>
 
-          <div className="flex-none flex items-center gap-4 min-w-[280px] justify-end">
+          <div className="flex-none flex items-center gap-2 lg:gap-3 justify-end ml-4">
             {/* Go to Main Website Button */}
             <a
               href="https://webacklinks.com/"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 hover:text-emerald-800 transition-all uppercase tracking-wider"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 hover:text-emerald-800 transition-all uppercase tracking-wider shrink-0"
+              title="Go to Main Website"
             >
               <ExternalLink size={14} />
-              <span>Go to Main Website</span>
+              <span className="hidden xl:inline">Go to Main Website</span>
+              <span className="inline xl:hidden">Website</span>
             </a>
 
             {/* User Profile Trigger */}
             <button
               onClick={() => setActiveTab("profile")}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer shrink-0 ${
                 activeTab === "profile"
                   ? "bg-blue-50 border-blue-200 text-blue-700"
                   : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
@@ -1016,17 +1246,17 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   {user.name.charAt(0).toUpperCase()}
                 </div>
               )}
-              <span>{user.name}</span>
+              <span className="hidden lg:inline max-w-[100px] truncate">{user.name}</span>
             </button>
 
             {/* Logout Trigger */}
             <button
               onClick={onLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shrink-0"
               title="Sign Out"
             >
               <LogOut size={12} />
-              <span>Sign Out</span>
+              <span className="hidden lg:inline">Sign Out</span>
             </button>
           </div>
         </header>
@@ -1037,19 +1267,17 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           <div className="md:hidden flex flex-wrap items-center justify-around gap-4 p-4 bg-white border border-slate-200 rounded-2xl mb-6 shadow-xs">
             <button
               onClick={() => setShowBankModal(true)}
-              className="flex items-center gap-1.5 text-slate-800 hover:text-blue-600 font-semibold text-[11px] cursor-pointer"
+              className={`flex items-center gap-1.5 font-semibold text-[11px] cursor-pointer ${
+                hasBankDetails
+                  ? "text-slate-800 hover:text-blue-600"
+                  : "text-red-600 hover:text-red-700 font-bold"
+              }`}
             >
-              <Landmark size={15} className="text-slate-800" />
-              <span className="underline">Bank Details</span>
+              <Landmark size={15} className={hasBankDetails ? "text-slate-800" : "text-red-600 animate-pulse"} />
+              <span className={`underline ${hasBankDetails ? "" : "decoration-red-500 font-bold"}`}>Add Fund</span>
             </button>
 
-            <button
-              onClick={() => setShowTopUpModal(true)}
-              className="flex items-center gap-1.5 text-slate-800 hover:text-blue-600 font-semibold text-[11px] cursor-pointer"
-            >
-              <PlusCircle size={15} className="text-blue-600" />
-              <span className="underline font-semibold text-blue-600">Top Up</span>
-            </button>
+
 
             <div className="flex items-center gap-1.5 font-semibold text-[11px] text-slate-800">
               <Wallet size={15} className="text-blue-600" />
@@ -2067,18 +2295,52 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                       <p className="text-[11px] text-slate-400 italic">No bank accounts configured by administrator yet.</p>
                     ) : (
                       <div className="space-y-4">
-                        {settings.bankAccounts.map((acc, index) => (
-                          <div key={acc.id || index} className="p-0 rounded-2xl border border-slate-200/85 bg-white hover:border-blue-400/60 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans">
-                            {/* Header banner of the card */}
-                            <div className="bg-gradient-to-r from-slate-50 to-slate-100/80 px-4 py-3 flex justify-between items-center border-b border-slate-200/60">
-                              <div className="flex items-center gap-2">
-                                <div className="p-1.5 bg-blue-500/10 text-blue-600 rounded-lg">
-                                  <Landmark size={14} className="animate-pulse" />
+                        {settings.bankAccounts.map((acc, index) => {
+                          const themes = [
+                            {
+                              border: "border-amber-200/80 hover:border-amber-400 bg-gradient-to-br from-amber-50/10 to-white",
+                              headerBg: "bg-gradient-to-r from-amber-50/70 to-orange-50/30 border-b border-amber-200/50",
+                              iconBg: "bg-amber-500/10 text-amber-600",
+                              badge: "text-amber-600 bg-amber-50 border-amber-100/50"
+                            },
+                            {
+                              border: "border-blue-200/80 hover:border-blue-400 bg-gradient-to-br from-blue-50/10 to-white",
+                              headerBg: "bg-gradient-to-r from-blue-50/70 to-indigo-50/30 border-b border-blue-200/50",
+                              iconBg: "bg-blue-500/10 text-blue-600",
+                              badge: "text-blue-600 bg-blue-50 border-blue-100/50"
+                            },
+                            {
+                              border: "border-emerald-200/80 hover:border-emerald-400 bg-gradient-to-br from-emerald-50/10 to-white",
+                              headerBg: "bg-gradient-to-r from-emerald-50/70 to-teal-50/30 border-b border-emerald-200/50",
+                              iconBg: "bg-emerald-500/10 text-emerald-600",
+                              badge: "text-emerald-600 bg-emerald-50 border-emerald-100/50"
+                            },
+                            {
+                              border: "border-purple-200/80 hover:border-purple-400 bg-gradient-to-br from-purple-50/10 to-white",
+                              headerBg: "bg-gradient-to-r from-purple-50/70 to-violet-50/30 border-b border-purple-200/50",
+                              iconBg: "bg-purple-500/10 text-purple-600",
+                              badge: "text-purple-600 bg-purple-50 border-purple-100/50"
+                            },
+                            {
+                              border: "border-rose-200/80 hover:border-rose-400 bg-gradient-to-br from-rose-50/10 to-white",
+                              headerBg: "bg-gradient-to-r from-rose-50/70 to-pink-50/30 border-b border-rose-200/50",
+                              iconBg: "bg-rose-500/10 text-rose-600",
+                              badge: "text-rose-600 bg-rose-50 border-rose-100/50"
+                            }
+                          ];
+                          const theme = themes[index % themes.length];
+                          return (
+                            <div key={acc.id || index} className={`p-0 rounded-2xl border ${theme.border} shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans`}>
+                              {/* Header banner of the card */}
+                              <div className={`${theme.headerBg} px-4 py-3 flex justify-between items-center`}>
+                                <div className="flex items-center gap-2">
+                                  <div className={`p-1.5 ${theme.iconBg} rounded-lg`}>
+                                    <Landmark size={14} className="animate-pulse" />
+                                  </div>
+                                  <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
                                 </div>
-                                <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
+                                <span className={`text-[9px] font-extrabold ${theme.badge} px-2.5 py-0.5 rounded-full uppercase`}>Account {index + 1}</span>
                               </div>
-                              <span className="text-[9px] font-extrabold text-blue-600 bg-blue-50 border border-blue-100/50 px-2.5 py-0.5 rounded-full uppercase">Account {index + 1}</span>
-                            </div>
                             
                             {/* Rows list of bank details */}
                             <div className="p-4 space-y-3 bg-gradient-to-b from-white to-slate-50/40">
@@ -2172,7 +2434,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                               )}
                             </div>
                           </div>
-                        ))}
+                        );
+                      })}
                       </div>
                     )}
                   </div>
@@ -2212,61 +2475,74 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
-                      Deposit Amount ({settings.currency}) <span className="text-red-500 font-bold">*</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="deposit-amount"
-                        type="number"
-                        required
-                        min="1"
-                        placeholder="e.g. 15000"
-                        value={depositAmount}
-                        onChange={(e) => setDepositAmount(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold shadow-2xs"
-                      />
-                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">
-                        {settings.currency === "PKR" ? "₨" : settings.currency}
-                      </span>
-                    </div>
+                   {/* Your Registered Bank Details card */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-extrabold flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                      <span>Your Registered Bank Account Details</span>
+                    </span>
+                    {user.userBankName ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div className="bg-amber-50 border border-amber-100/70 p-3 rounded-xl">
+                          <span className="block text-[8px] text-amber-600 uppercase font-black tracking-wider mb-0.5">Bank Name</span>
+                          <span className="font-bold text-amber-950 text-xs block truncate" title={user.userBankName}>{user.userBankName}</span>
+                        </div>
+                        <div className="bg-blue-50 border border-blue-100/70 p-3 rounded-xl">
+                          <span className="block text-[8px] text-blue-600 uppercase font-black tracking-wider mb-0.5">Account Title</span>
+                          <span className="font-bold text-blue-950 text-xs block truncate" title={user.userAccountTitle}>{user.userAccountTitle}</span>
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-100/70 p-3 rounded-xl">
+                          <span className="block text-[8px] text-emerald-600 uppercase font-black tracking-wider mb-0.5">Account Number</span>
+                          <span className="font-mono font-bold text-emerald-950 text-xs block break-all">{user.userAccountNumber}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 text-[11px] text-amber-700 font-bold leading-relaxed flex items-center gap-2">
+                        <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                        <div>
+                          You haven't added your bank details yet. Go to the{" "}
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab("profile")}
+                            className="underline text-blue-600 hover:text-blue-800 cursor-pointer font-extrabold"
+                          >
+                            Profile tab
+                          </button>{" "}
+                          to add them so admin can verify your deposit.
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
-                        Payment Method <span className="text-red-500 font-bold">*</span>
+                        Deposit Amount ({settings.currency}) <span className="text-red-500 font-bold">*</span>
                       </label>
                       <div className="relative">
-                        <select
-                          id="deposit-method"
-                          value={depositMethod}
-                          onChange={(e) => setDepositMethod(e.target.value)}
-                          className="w-full pl-4 pr-10 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 appearance-none transition-all font-semibold cursor-pointer shadow-2xs"
-                        >
-                          <option value="Easypaisa">Easypaisa Mobile Wallet</option>
-                          <option value="JazzCash">JazzCash Mobile Wallet</option>
-                          <option value="Nayapay">Nayapay</option>
-                          <option value="Sadapay">Sadapay</option>
-                          <option value="HBL Bank">HBL Bank Ltd</option>
-                          <option value="Meezan Bank">Meezan Bank</option>
-                          <option value="UBL Bank">UBL Bank</option>
-                          <option value="Other Bank Transfer">Other Bank Transfer</option>
-                          <option value="USDT (TRC20)">USDT (TRC20)</option>
-                        </select>
-                        <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                        <input
+                          id="deposit-amount"
+                          type="number"
+                          required
+                          min="1"
+                          placeholder="e.g. 15000"
+                          value={depositAmount}
+                          onChange={(e) => setDepositAmount(e.target.value)}
+                          className="w-full pl-10 pr-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold shadow-2xs"
+                        />
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">
+                          {settings.currency === "PKR" ? "₨" : settings.currency}
+                        </span>
                       </div>
                     </div>
 
                     <div>
                       <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-2">
-                        Transaction ID (Txn ID) <span className="text-red-500 font-bold">*</span>
+                        Transaction ID (Txn ID) <span className="text-slate-400 font-mono font-normal">(optional)</span>
                       </label>
                       <input
                         id="deposit-txn"
                         type="text"
-                        required
                         placeholder="e.g. 5001298457"
                         value={depositTxn}
                         onChange={(e) => setDepositTxn(e.target.value)}
@@ -2473,6 +2749,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           </div>
         )}
 
+
+
         {/* --- TAB: PROFILE SETTINGS --- */}
         {activeTab === "profile" && (
           <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
@@ -2627,19 +2905,289 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 </form>
               </div>
             </div>
+
+            {/* Payment Bank Details Section in Profile */}
+            <div id="bank-details-section" className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-sm relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600"></div>
+              
+              <div className="flex items-start gap-4 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+                  <Landmark size={20} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Payment Bank Account Details</h2>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Configure your primary bank account. Administrators will verify incoming manual deposits against these details to authorize your credits.
+                  </p>
+                </div>
+              </div>
+
+              {bankSuccess && (
+                <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-2.5 animate-bounce-subtle">
+                  <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center font-black shrink-0">✓</div>
+                  <span>{bankSuccess}</span>
+                </div>
+              )}
+
+              {bankError && (
+                <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-100 text-red-800 text-xs font-bold flex items-center gap-2.5">
+                  <div className="w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center font-black shrink-0">!</div>
+                  <span>{bankError}</span>
+                </div>
+              )}
+
+              {hasBankDetails && !isEditingBank ? (
+                /* Premium, High-Contrast Multi-Colored Cards with Custom Action Buttons */
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                  {/* Card 1: Bank Name - Amber/Orange theme */}
+                  <div className="relative overflow-hidden bg-gradient-to-br from-amber-50 to-orange-50/40 rounded-2xl border border-amber-100/80 p-5 shadow-2xs flex flex-col justify-between group hover:shadow-xs transition-all duration-300">
+                    <div className="absolute top-0 right-0 -mr-4 -mt-4 w-16 h-16 bg-amber-500/10 rounded-full blur-xl group-hover:scale-125 transition-transform"></div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
+                          <Landmark size={14} className="animate-pulse" />
+                        </div>
+                        <span className="text-[10px] uppercase tracking-widest text-amber-600 font-extrabold">
+                          Bank Name
+                        </span>
+                      </div>
+                      <div className="text-sm font-bold text-amber-900 tracking-wide font-sans line-clamp-2">
+                        {user.userBankName}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card 2: Account Title - Indigo/Blue theme */}
+                  <div className="relative overflow-hidden bg-gradient-to-br from-blue-50 to-indigo-50/40 rounded-2xl border border-blue-100/80 p-5 shadow-2xs flex flex-col justify-between group hover:shadow-xs transition-all duration-300">
+                    <div className="absolute top-0 right-0 -mr-4 -mt-4 w-16 h-16 bg-blue-500/10 rounded-full blur-xl group-hover:scale-125 transition-transform"></div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                          <UserIcon size={14} />
+                        </div>
+                        <span className="text-[10px] uppercase tracking-widest text-blue-600 font-extrabold">
+                          Account Title
+                        </span>
+                      </div>
+                      <div className="text-sm font-bold text-blue-900 tracking-wide font-sans line-clamp-2">
+                        {user.userAccountTitle}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card 3: Account Number - Emerald/Teal theme */}
+                  <div className="relative overflow-hidden bg-gradient-to-br from-emerald-50 to-teal-50/40 rounded-2xl border border-emerald-100/80 p-5 shadow-2xs flex flex-col justify-between group hover:shadow-xs transition-all duration-300">
+                    <div className="absolute top-0 right-0 -mr-4 -mt-4 w-16 h-16 bg-emerald-500/10 rounded-full blur-xl group-hover:scale-125 transition-transform"></div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                          <Briefcase size={14} />
+                        </div>
+                        <span className="text-[10px] uppercase tracking-widest text-emerald-600 font-extrabold">
+                          Account Number / IBAN
+                        </span>
+                      </div>
+                      <div className="text-sm font-black text-emerald-900 tracking-wider font-mono select-all">
+                        {user.userAccountNumber}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action buttons span all or placed nicely */}
+                  <div className="md:col-span-3 flex justify-end gap-2.5 mt-2">
+                    {/* Edit Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserBankName(user.userBankName || "");
+                        setUserAccountTitle(user.userAccountTitle || "");
+                        setUserAccountNumber(user.userAccountNumber || "");
+                        setIsEditingBank(true);
+                      }}
+                      className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 hover:text-indigo-600 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-3xs cursor-pointer flex items-center gap-2 hover:border-indigo-150 active:scale-98"
+                    >
+                      <Pencil size={12} />
+                      <span>Edit Bank Account</span>
+                    </button>
+
+                    {/* Delete Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-3xs cursor-pointer flex items-center gap-2 active:scale-98"
+                    >
+                      <Trash2 size={12} />
+                      <span>Delete Account</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Input Form for adding/editing details with spacious fonts */
+                <form onSubmit={handleBankDetailsSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-1.5">
+                      Your Bank Name <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Meezan Bank, HBL, Allied Bank"
+                      value={userBankName}
+                      onChange={(e) => setUserBankName(e.target.value)}
+                      className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold tracking-wide focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-1.5">
+                      Account Holder Name / Title <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Muhammad Ali"
+                      value={userAccountTitle}
+                      onChange={(e) => setUserAccountTitle(e.target.value)}
+                      className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold tracking-wide focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-extrabold mb-1.5">
+                      Account Number or IBAN <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. PK73MEZN0023419203847"
+                      value={userAccountNumber}
+                      onChange={(e) => setUserAccountNumber(e.target.value)}
+                      className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 text-xs font-mono font-bold tracking-widest focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="md:col-span-3 pt-2 flex flex-wrap gap-3">
+                    <button
+                      type="submit"
+                      disabled={bankSubmitting}
+                      className="px-6 py-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 disabled:from-slate-100 disabled:to-slate-200 disabled:text-slate-400 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-blue-500/5 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {bankSubmitting ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <>
+                          <Landmark size={14} />
+                          <span>Save Account Details</span>
+                        </>
+                      )}
+                    </button>
+
+                    {isEditingBank && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserBankName(user.userBankName || "");
+                          setUserAccountTitle(user.userAccountTitle || "");
+                          setUserAccountNumber(user.userAccountNumber || "");
+                          setIsEditingBank(false);
+                        }}
+                        className="px-6 py-3 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         )}
       </main>
 
+      {/* --- DELETE BANK DETAILS CONFIRMATION MODAL --- */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="delete-bank-confirm-modal">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-zoom-in p-6 text-center space-y-6">
+            <div className="w-16 h-16 rounded-full bg-red-50 border border-red-100 text-red-600 flex items-center justify-center mx-auto shadow-2xs">
+              <Trash2 size={32} className="animate-pulse" />
+            </div>
+            <div className="space-y-3">
+              <h3 className="font-sans font-extrabold text-lg text-slate-900 tracking-wide leading-tight">
+                Delete Bank Account Details
+              </h3>
+              <p className="text-xs text-slate-500 leading-relaxed tracking-wide max-w-sm mx-auto">
+                Are you sure you want to delete your saved payment bank account details? This will clear your bank name, account title, and account number.
+              </p>
+            </div>
+            <div className="pt-2 flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 py-3 px-4 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer text-center"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={bankDeleting}
+                onClick={handleBankDetailsDelete}
+                className="flex-1 py-3 px-4 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-red-500/10 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+              >
+                {bankDeleting ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    <Trash2 size={14} />
+                    <span>Delete Details</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- BANK DETAILS MODAL --- */}
       {showBankModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in" id="bank-details-modal">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-zoom-in">
-            <div className="p-6 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
+          {!user.userBankName || !user.userAccountTitle || !user.userAccountNumber ? (
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-zoom-in p-6 text-center space-y-6">
+              <div className="w-16 h-16 rounded-full bg-red-50 border border-red-100 text-red-500 flex items-center justify-center mx-auto shadow-2xs">
+                <AlertTriangle size={32} className="animate-pulse" />
+              </div>
+              <div className="space-y-3">
+                <h3 className="font-sans font-extrabold text-lg text-slate-900 tracking-wide leading-tight">
+                  Add Sender Bank Account Details
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed tracking-wide max-w-sm mx-auto">
+                  Please configure your sender bank details in your profile first. The administrators require your bank account name, title, and number to verify and audit your deposit payments securely.
+                </p>
+              </div>
+              <div className="pt-2 flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleConfigureBankClick}
+                  className="w-full py-3 px-4 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-red-500/10 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <UserIcon size={14} />
+                  <span>Configure My Bank Account</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBankModal(false)}
+                  className="w-full py-2 px-4 text-slate-500 hover:text-slate-800 font-bold text-xs tracking-wider transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-zoom-in">
+              <div className="p-6 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
                 <Landmark size={20} className="text-white" />
                 <div>
-                  <h3 className="font-sans font-bold text-sm leading-none text-white">WeBacklinks Bank Accounts</h3>
+                  <h3 className="font-sans font-bold text-sm leading-none text-white">Add Fund</h3>
                   <p className="text-[9px] text-blue-100/75 uppercase tracking-widest font-mono mt-1">Official bank channels for deposits</p>
                 </div>
               </div>
@@ -2660,18 +3208,52 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 <p className="text-xs text-slate-400 italic text-center py-4">No bank accounts configured by administrator yet.</p>
               ) : (
                 <div className="space-y-4">
-                  {settings.bankAccounts.map((acc, index) => (
-                    <div key={acc.id || index} className="p-0 rounded-2xl border border-slate-200/85 bg-white hover:border-blue-400/60 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans">
-                      {/* Header banner of the card */}
-                      <div className="bg-gradient-to-r from-slate-50 to-slate-100/80 px-4 py-3 flex justify-between items-center border-b border-slate-200/60">
-                        <div className="flex items-center gap-2">
-                          <div className="p-1.5 bg-blue-500/10 text-blue-600 rounded-lg">
-                            <Landmark size={14} className="animate-pulse" />
+                  {settings.bankAccounts.map((acc, index) => {
+                    const themes = [
+                      {
+                        border: "border-amber-200/80 hover:border-amber-400 bg-gradient-to-br from-amber-50/10 to-white",
+                        headerBg: "bg-gradient-to-r from-amber-50/70 to-orange-50/30 border-b border-amber-200/50",
+                        iconBg: "bg-amber-500/10 text-amber-600",
+                        badge: "text-amber-600 bg-amber-50 border-amber-100/50"
+                      },
+                      {
+                        border: "border-blue-200/80 hover:border-blue-400 bg-gradient-to-br from-blue-50/10 to-white",
+                        headerBg: "bg-gradient-to-r from-blue-50/70 to-indigo-50/30 border-b border-blue-200/50",
+                        iconBg: "bg-blue-500/10 text-blue-600",
+                        badge: "text-blue-600 bg-blue-50 border-blue-100/50"
+                      },
+                      {
+                        border: "border-emerald-200/80 hover:border-emerald-400 bg-gradient-to-br from-emerald-50/10 to-white",
+                        headerBg: "bg-gradient-to-r from-emerald-50/70 to-teal-50/30 border-b border-emerald-200/50",
+                        iconBg: "bg-emerald-500/10 text-emerald-600",
+                        badge: "text-emerald-600 bg-emerald-50 border-emerald-100/50"
+                      },
+                      {
+                        border: "border-purple-200/80 hover:border-purple-400 bg-gradient-to-br from-purple-50/10 to-white",
+                        headerBg: "bg-gradient-to-r from-purple-50/70 to-violet-50/30 border-b border-purple-200/50",
+                        iconBg: "bg-purple-500/10 text-purple-600",
+                        badge: "text-purple-600 bg-purple-50 border-purple-100/50"
+                      },
+                      {
+                        border: "border-rose-200/80 hover:border-rose-400 bg-gradient-to-br from-rose-50/10 to-white",
+                        headerBg: "bg-gradient-to-r from-rose-50/70 to-pink-50/30 border-b border-rose-200/50",
+                        iconBg: "bg-rose-500/10 text-rose-600",
+                        badge: "text-rose-600 bg-rose-50 border-rose-100/50"
+                      }
+                    ];
+                    const theme = themes[index % themes.length];
+                    return (
+                      <div key={acc.id || index} className={`p-0 rounded-2xl border ${theme.border} shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden text-left font-sans`}>
+                        {/* Header banner of the card */}
+                        <div className={`${theme.headerBg} px-4 py-3 flex justify-between items-center`}>
+                          <div className="flex items-center gap-2">
+                            <div className={`p-1.5 ${theme.iconBg} rounded-lg`}>
+                              <Landmark size={14} className="animate-pulse" />
+                            </div>
+                            <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
                           </div>
-                          <span className="text-xs font-extrabold text-slate-800 tracking-tight uppercase font-sans">{acc.bankName}</span>
+                          <span className={`text-[9px] font-extrabold ${theme.badge} px-2.5 py-0.5 rounded-full uppercase`}>Account {index + 1}</span>
                         </div>
-                        <span className="text-[9px] font-extrabold text-blue-600 bg-blue-50 border border-blue-100/50 px-2.5 py-0.5 rounded-full uppercase">Account {index + 1}</span>
-                      </div>
                       
                       {/* Rows list of bank details */}
                       <div className="p-4 space-y-3 bg-gradient-to-b from-white to-slate-50/40">
@@ -2765,7 +3347,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                         )}
                       </div>
                     </div>
-                  ))}
+                  );
+                })}
                 </div>
               )}
             </div>
@@ -2790,10 +3373,11 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               </button>
             </div>
           </div>
+          )}
         </div>
       )}
 
-      {/* --- TOP UP DEPOSIT MODAL --- */}
+      {/* --- MANUAL DEPOSIT LOG MODAL --- */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in" id="topup-request-modal">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-xl overflow-hidden animate-zoom-in">
@@ -2838,7 +3422,48 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 </div>
               </div>
 
-              {/* Deposit amount and payment method gateway */}
+              {/* Your Registered Bank Details card */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-extrabold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                  <span>Your Registered Bank Account Details</span>
+                </span>
+                {user.userBankName ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="bg-amber-50 border border-amber-100/70 p-3 rounded-xl">
+                      <span className="block text-[8px] text-amber-600 uppercase font-black tracking-wider mb-0.5">Bank Name</span>
+                      <span className="font-bold text-amber-950 text-xs block truncate" title={user.userBankName}>{user.userBankName}</span>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-100/70 p-3 rounded-xl">
+                      <span className="block text-[8px] text-blue-600 uppercase font-black tracking-wider mb-0.5">Account Title</span>
+                      <span className="font-bold text-blue-950 text-xs block truncate" title={user.userAccountTitle}>{user.userAccountTitle}</span>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-100/70 p-3 rounded-xl">
+                      <span className="block text-[8px] text-emerald-600 uppercase font-black tracking-wider mb-0.5">Account Number</span>
+                      <span className="font-mono font-bold text-emerald-950 text-xs block break-all">{user.userAccountNumber}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 text-[11px] text-amber-700 font-bold leading-relaxed flex items-center gap-2">
+                    <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                    <div>
+                      You haven't added your bank details yet. Please configure them in your{" "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowTopUpModal(false);
+                          setActiveTab("profile");
+                        }}
+                        className="underline text-blue-600 hover:text-blue-800 cursor-pointer font-extrabold"
+                      >
+                        Profile
+                      </button>{" "}
+                      tab first.
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5 flex items-center gap-1">
@@ -2856,48 +3481,22 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                       placeholder="e.g. 5000"
                       value={depositAmount}
                       onChange={(e) => setDepositAmount(e.target.value)}
-                      className="w-full px-3 py-3 bg-transparent text-slate-800 text-xs focus:outline-none font-semibold"
+                      className="w-full px-3 py-3 bg-transparent text-slate-800 text-xs focus:outline-none font-semibold font-mono"
                     />
                   </div>
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5">
-                    Payment Gateway Channel
+                    Transaction Ref / ID <span className="text-slate-400 font-mono font-normal">(optional)</span>
                   </label>
-                  <div className="relative flex items-stretch rounded-xl overflow-hidden border border-slate-200 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all shadow-xs bg-white">
-                    <select
-                      value={depositMethod}
-                      onChange={(e) => setDepositMethod(e.target.value)}
-                      className="w-full pl-4 pr-10 py-3 bg-transparent text-slate-800 text-xs focus:outline-none appearance-none font-semibold cursor-pointer"
-                    >
-                      <option value="Easypaisa">Easypaisa Mobile Wallet</option>
-                      <option value="JazzCash">JazzCash Mobile Wallet</option>
-                      <option value="Nayapay">Nayapay</option>
-                      <option value="Sadapay">Sadapay</option>
-                      <option value="HBL Bank">HBL Bank Ltd</option>
-                      <option value="Faisal Bank">Faisal Bank</option>
-                      <option value="Meezan Bank">Meezan Bank</option>
-                      <option value="UBL Bank">UBL Bank</option>
-                      <option value="Other Bank Transfer">Other Bank Transfer</option>
-                    </select>
-                    <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                  </div>
+                  <input
+                    type="text"
+                    placeholder="Enter unique bank txn ID"
+                    value={depositTxn}
+                    onChange={(e) => setDepositTxn(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-mono font-bold uppercase tracking-wider shadow-xs"
+                  />
                 </div>
-              </div>
-
-              {/* Transaction ID */}
-              <div>
-                <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5">
-                  Transaction Ref / ID <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Enter the unique bank transaction ID"
-                  value={depositTxn}
-                  onChange={(e) => setDepositTxn(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-mono font-bold uppercase tracking-wider shadow-xs"
-                />
               </div>
 
               {/* Custom Screenshot upload drag-and-drop zone */}
@@ -2984,6 +3583,117 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
         </div>
       )}
 
+      {/* --- INSTANT TOP UP MODAL --- */}
+      {showInstantTopUpModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in" id="instant-topup-modal">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-xl overflow-hidden animate-zoom-in">
+            <div className="p-6 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <PlusCircle size={22} className="text-blue-100" />
+                <div>
+                  <h3 className="font-sans font-bold text-base leading-none text-white">Instant Wallet Top Up</h3>
+                  <p className="text-[10px] text-blue-100/85 uppercase tracking-widest font-mono mt-1">Add approved credits to your wallet balance instantly</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInstantTopUpModal(false)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleInstantTopUpSubmit} className="p-6 space-y-5 max-h-[520px] overflow-y-auto text-left bg-gradient-to-b from-white to-slate-50/60">
+
+              {instantError && (
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold animate-shake">
+                  <div className="font-bold mb-0.5">Submission Error</div>
+                  <div className="font-mono text-[11px] leading-relaxed break-words">{instantError}</div>
+                </div>
+              )}
+
+              {user.approvedTopUpAmount > 0 && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-3">
+                  <span className="flex h-3 w-3 mt-1 shrink-0 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                  <div>
+                    <h4 className="text-xs font-extrabold text-emerald-800 uppercase tracking-wider mb-0.5">Approved Limit Ready! 🟢</h4>
+                    <p className="text-[11px] text-emerald-700 font-medium leading-relaxed">
+                      Your requested funds have been approved by the admin. You can now type the approved amount of <span className="font-bold">{settings.currency} {user.approvedTopUpAmount.toLocaleString()}</span> (or any amount up to this limit) below to instantly transfer it to your active wallet balance.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Read-only user info shown in a beautiful slate metadata card */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/60 shadow-xs space-y-3">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-400 font-extrabold uppercase tracking-wider text-[10px]">Client Name:</span>
+                  <span className="font-bold text-slate-700">{user.name}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs border-t border-slate-100 pt-2">
+                  <span className="text-slate-400 font-extrabold uppercase tracking-wider text-[10px]">Approved Top Up Limit:</span>
+                  <span className="font-extrabold text-blue-600 font-mono text-sm bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-lg">
+                    {settings.currency} {(user.approvedTopUpAmount || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Deposit amount and payment method gateway */}
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-slate-600 font-bold mb-1.5 flex items-center gap-1">
+                  <span>Enter Amount to Top Up</span>
+                  <span className="text-[9px] text-slate-400 font-semibold">({settings.currency})</span>
+                </label>
+                <div className="relative flex items-stretch rounded-xl overflow-hidden border border-slate-200 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all shadow-xs bg-white">
+                  <span className="flex items-center justify-center px-3.5 bg-slate-50 border-r border-slate-200 text-slate-500 text-xs font-bold font-mono">
+                    {settings.currency === "PKR" ? "₨" : settings.currency}
+                  </span>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    placeholder="e.g. 5000"
+                    value={instantAmount}
+                    onChange={(e) => setInstantAmount(e.target.value)}
+                    className="w-full px-3 py-3 bg-transparent text-slate-800 text-xs focus:outline-none font-semibold font-mono"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                  Note: You cannot top up more than your approved limit of <span className="font-bold text-slate-600">{settings.currency} {(user.approvedTopUpAmount || 0).toLocaleString()}</span> set by the admin.
+                </p>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4 flex gap-3 items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowInstantTopUpModal(false)}
+                  className="py-2.5 px-4 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-100 text-xs font-bold uppercase tracking-wider cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={instantSubmitting}
+                  className="py-2.5 px-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-slate-100 disabled:to-slate-200 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  {instantSubmitting ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <>
+                      <PlusCircle size={13} />
+                      <span>Top Up</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* --- BEAUTIFUL CONGRATS SUCCESS POPUP MODAL --- */}
       {showCongratsModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-md flex items-center justify-center z-[10000] p-4 animate-fade-in" id="congrats-modal">
@@ -3013,6 +3723,36 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 Processing details & updating your dashboard...
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- WRONG AMOUNT ERROR POPUP MODAL --- */}
+      {showWrongAmountModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[10000] p-4 animate-fade-in" id="wrong-amount-modal">
+          <div className="bg-white rounded-3xl shadow-2xl border border-red-100 max-w-md w-full overflow-hidden p-8 text-center animate-zoom-in relative">
+            <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-100 shadow-sm">
+              <AlertTriangle size={32} className="animate-bounce" />
+            </div>
+
+            <h3 className="font-sans font-black text-2xl text-slate-900 tracking-tight mb-2 uppercase">
+              Wrong Amount! ⚠️
+            </h3>
+            
+            <p className="text-[11px] font-bold uppercase tracking-widest text-red-600 mb-4 bg-red-50 inline-block px-3 py-1 rounded-full border border-red-100">
+              Limit Exceeded
+            </p>
+
+            <p className="text-slate-800 text-sm leading-relaxed mb-6 font-semibold bg-slate-50 p-4 rounded-2xl border border-slate-100 font-mono">
+              {wrongAmountError}
+            </p>
+
+            <button
+              onClick={() => setShowWrongAmountModal(false)}
+              className="w-full py-3 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer transition-all shadow-md hover:shadow-lg active:scale-95"
+            >
+              Okay, I understand
+            </button>
           </div>
         </div>
       )}

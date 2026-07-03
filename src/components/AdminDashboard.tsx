@@ -33,7 +33,8 @@ import {
   Download,
   HelpCircle,
   Phone,
-  Table
+  Table,
+  CloudLightning
 } from "lucide-react";
 import { User, Order, DepositRequest, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
@@ -77,7 +78,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
   // Edit / Action Modals
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showUserModal, setShowUserModal] = useState(false);
-  const [userForm, setUserForm] = useState({ name: "", phone: "", status: "active" as "active" | "inactive", role: "user" as "user" | "admin" });
+  const [userForm, setUserForm] = useState({ name: "", phone: "", status: "active" as "active" | "inactive", role: "user" as "user" | "admin", approvedTopUpAmount: 0 });
   
   // Balance Add / Remove
   const [showCreditModal, setShowCreditModal] = useState(false);
@@ -150,6 +151,11 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
   const [previewContent, setPreviewContent] = useState<string>("");
   const [previewLoading, setPreviewLoading] = useState<boolean>(false);
 
+  // Deposit edit & approve modal
+  const [showApproveDepositModal, setShowApproveDepositModal] = useState<boolean>(false);
+  const [selectedDepositForApproval, setSelectedDepositForApproval] = useState<DepositRequest | null>(null);
+  const [approvalAmount, setApprovalAmount] = useState<string>("");
+
   const renderCsvTable = (csvText: string) => {
     const lines = csvText.split("\n").filter(l => l.trim() !== "");
     const rows = lines.map(line => {
@@ -190,7 +196,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
   const [settingsError, setSettingsError] = useState("");
   const [settingsSuccess, setSettingsSuccess] = useState("");
   const [settingsSubmitting, setSettingsSubmitting] = useState(false);
-  const [activeSettingsSubTab, setActiveSettingsSubTab] = useState<"general" | "banks" | "categories" | "custom_tabs">("general");
+  const [activeSettingsSubTab, setActiveSettingsSubTab] = useState<"general" | "banks" | "categories" | "custom_tabs" | "mega">("general");
 
   // Admin Profile Form States
   const [profileName, setProfileName] = useState<string>(user.name);
@@ -257,6 +263,13 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
   }, [activeTab]);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      fetchAdminData(true);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  useEffect(() => {
     setSettingsForm({ ...settings });
     const tabs = settings?.customTabs || ["Authority Backlinks", "High DA Guest Posts"];
     if (tabs.length > 0) {
@@ -291,9 +304,9 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
     }
   }, [showDetailsModal, selectedOrderDetails, token]);
 
-  const fetchAdminData = async () => {
+  const fetchAdminData = async (silent: boolean = false) => {
     try {
-      setLoadingDashboard(true);
+      if (!silent) setLoadingDashboard(true);
       const headers = { Authorization: `Bearer ${token}` };
       const [usersRes, ordersRes, depositsRes, rowsRes] = await Promise.all([
         fetch("/api/admin/users", { headers }),
@@ -309,7 +322,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
     } catch (e) {
       console.error("Failed to load admin databases:", e);
     } finally {
-      setLoadingDashboard(false);
+      if (!silent) setLoadingDashboard(false);
     }
   };
 
@@ -412,6 +425,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
       phone: u.phone,
       status: u.status,
       role: u.role,
+      approvedTopUpAmount: u.approvedTopUpAmount || 0,
     });
     setShowUserModal(true);
   };
@@ -516,9 +530,19 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
 
   // --- DEPOSIT REVIEW HANDLERS ---
   const handleReviewDeposit = async (id: string, status: "approved" | "rejected") => {
+    if (status === "approved") {
+      const dep = deposits.find(d => d.id === id);
+      if (dep) {
+        setSelectedDepositForApproval(dep);
+        setApprovalAmount(String(dep.amount));
+        setShowApproveDepositModal(true);
+      }
+      return;
+    }
+
     triggerConfirm(
-      "Review Deposit Request",
-      `Are you sure you want to mark this deposit request as ${status}? This will directly adjust the user's wallet balance.`,
+      "Reject Deposit Request",
+      `Are you sure you want to REJECT this deposit request? No funds will be credited to the user's wallet.`,
       async () => {
         try {
           const res = await fetch(`/api/deposits/${id}/review`, {
@@ -527,12 +551,12 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ status }),
+            body: JSON.stringify({ status: "rejected" }),
           });
 
           if (!res.ok) {
             const data = await res.json();
-            throw new Error(data.error || "Failed to review deposit.");
+            throw new Error(data.error || "Failed to reject deposit.");
           }
 
           fetchAdminData();
@@ -540,9 +564,45 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
           alert(err.message);
         }
       },
-      status === "rejected", // red warning icon for rejections, blue help for approvals
-      `Yes, ${status}`
+      true, // red warning icon for rejections
+      `Yes, Reject`
     );
+  };
+
+  const handleApproveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDepositForApproval) return;
+    const finalAmount = parseFloat(approvalAmount);
+    if (isNaN(finalAmount) || finalAmount <= 0) {
+      alert("Please enter a valid approved deposit amount.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/deposits/${selectedDepositForApproval.id}/review`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: "approved",
+          amount: finalAmount
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to approve deposit.");
+      }
+
+      setShowApproveDepositModal(false);
+      setSelectedDepositForApproval(null);
+      setApprovalAmount("");
+      fetchAdminData();
+    } catch (err: any) {
+      alert(err.message);
+    }
   };
 
   // --- ORDER REVIEW HANDLERS ---
@@ -1250,26 +1310,23 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
       {/* DESKTOP CONTENT COLUMN */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* DESKTOP TOP HEADER BAR */}
-        <header className="hidden md:flex items-center justify-between bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-30 shadow-xs">
-          <div>
-            <span className="text-xs uppercase tracking-widest text-slate-400 font-bold font-mono">
-              🛡️ Admin Security Session
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
+        <header className="hidden md:flex items-center justify-end bg-white border-b border-slate-200 px-6 lg:px-8 py-4 sticky top-0 z-30 shadow-xs">
+          <div className="flex items-center gap-2 lg:gap-3">
             {/* Go to Main Website Button */}
             <a
               href="https://webacklinks.com/"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 hover:text-emerald-800 transition-all uppercase tracking-wider"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 hover:text-emerald-800 transition-all uppercase tracking-wider shrink-0"
+              title="Go to Main Website"
             >
               <ExternalLink size={14} />
-              <span>Go to Main Website</span>
+              <span className="hidden xl:inline">Go to Main Website</span>
+              <span className="inline xl:hidden">Website</span>
             </a>
 
             {/* User Profile Trigger */}
             <button
               onClick={() => setActiveTab("profile")}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer shrink-0 ${
                 activeTab === "profile"
                   ? "bg-blue-50 border-blue-200 text-blue-700"
                   : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
@@ -1282,17 +1339,17 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                   {user.name.charAt(0).toUpperCase()}
                 </div>
               )}
-              <span>{user.name} (Admin)</span>
+              <span className="hidden lg:inline max-w-[100px] truncate">{user.name} (Admin)</span>
             </button>
 
             {/* Logout Trigger */}
             <button
               onClick={onLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shrink-0"
               title="Sign Out"
             >
               <LogOut size={12} />
-              <span>Sign Out</span>
+              <span className="hidden lg:inline">Sign Out</span>
             </button>
           </div>
         </header>
@@ -1826,6 +1883,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                       <th className="pb-3 font-bold">Client Info</th>
                       <th className="pb-3 font-bold">Role</th>
                       <th className="pb-3 font-bold">Balance</th>
+                      <th className="pb-3 font-bold">Approved Topup Limit</th>
                       <th className="pb-3 font-bold">Status</th>
                       <th className="pb-3 font-bold text-center">Orders This Month</th>
                       <th className="pb-3 font-bold">Registered Date</th>
@@ -1862,6 +1920,13 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                               <span className="text-slate-400 font-normal text-xs italic">N/A (Admin)</span>
                             ) : (
                               `${settings.currency} ${u.balance.toLocaleString()}`
+                            )}
+                          </td>
+                          <td className="py-3.5 font-bold text-slate-700 font-mono">
+                            {u.role === "admin" ? (
+                              <span className="text-slate-400 font-normal text-xs italic">-</span>
+                            ) : (
+                              `${settings.currency} ${(u.approvedTopUpAmount || 0).toLocaleString()}`
                             )}
                           </td>
                           <td className="py-3.5">
@@ -1946,10 +2011,10 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                     <thead>
                       <tr className="border-b border-slate-200 text-slate-400 uppercase tracking-wider text-[10px] font-bold">
                         <th className="pb-3 font-bold">User Profile</th>
-                        <th className="pb-3 font-bold">Method</th>
-                        <th className="pb-3 font-bold">Txn ID</th>
+                        <th className="pb-3 font-bold">Client Bank Details</th>
+                        <th className="pb-3 font-bold">Txn ID (TID)</th>
                         <th className="pb-3 font-bold">Amount</th>
-                        <th className="pb-3 font-bold">Screenshot</th>
+                        <th className="pb-3 font-bold">File Attached</th>
                         <th className="pb-3 font-bold">Status</th>
                         <th className="pb-3 font-bold text-right">Manual Action</th>
                       </tr>
@@ -1965,8 +2030,30 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                               <span className="text-xs text-slate-500 font-mono pl-0.5">{d.userEmail}</span>
                             </div>
                           </td>
-                          <td className="py-3.5 font-semibold text-slate-700">{d.paymentMethod}</td>
-                          <td className="py-3.5 font-mono text-[11px] text-slate-500">{d.transactionId}</td>
+                          <td className="py-3.5">
+                            {d.userBankName ? (
+                              <div className="bg-slate-50 border border-slate-200/50 p-2.5 rounded-xl space-y-1.5 max-w-[200px] shadow-2xs">
+                                <div className="text-[9px] font-extrabold text-emerald-700 bg-emerald-50/80 border border-emerald-100 px-1.5 py-0.5 rounded uppercase tracking-wider self-start inline-block">
+                                  {d.userBankName}
+                                </div>
+                                <div className="text-[11px] font-bold text-slate-800 leading-tight">
+                                  {d.userAccountTitle}
+                                </div>
+                                <div className="text-[10px] font-mono text-slate-500 font-medium break-all select-all hover:text-blue-600 transition-colors cursor-pointer" title="Click to copy account number">
+                                  {d.userAccountNumber}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 font-semibold italic">No bank profile configured</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 font-mono text-[11px] text-slate-500">
+                            {d.transactionId && d.transactionId !== "N/A" && d.transactionId.trim() !== "" ? (
+                              <span className="font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded-md border border-slate-200 font-mono text-[11px]">{d.transactionId}</span>
+                            ) : (
+                              <span className="text-slate-400 font-bold">-</span>
+                            )}
+                          </td>
                           <td className="py-3.5 font-bold text-slate-800 font-mono">
                             {settings.currency} {d.amount.toLocaleString()}
                           </td>
@@ -1981,7 +2068,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                                 View Receipt <ExternalLink size={10} />
                               </a>
                             ) : (
-                              <span className="text-slate-400 font-mono text-[10px] uppercase font-bold">None attached</span>
+                              <span className="text-slate-400 font-bold">-</span>
                             )}
                           </td>
                           <td className="py-3.5">
@@ -2285,6 +2372,17 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 }`}
               >
                 📁 Dynamic Tabs & Domain List
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSettingsSubTab("mega")}
+                className={`py-2.5 px-5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                  activeSettingsSubTab === "mega"
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                ☁️ Mega.nz Storage
               </button>
             </div>
 
@@ -2658,6 +2756,59 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 </div>
               )}
 
+              {activeSettingsSubTab === "mega" && (
+                <div className="space-y-6">
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-5">
+                    <div className="border-b border-slate-100 pb-3 flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center">
+                        <CloudLightning size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800">Mega.nz Cloud Storage Configuration</h3>
+                        <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                          Securely link your personal Mega.nz account. App files, transaction screenshots, and completed reports will be automatically uploaded directly to your Mega storage instead of local disk.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div className="space-y-2">
+                        <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-500">
+                          Mega.nz Account Email
+                        </label>
+                        <input
+                          type="email"
+                          placeholder="storage@example.com"
+                          value={settingsForm.megaEmail || ""}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, megaEmail: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl bg-slate-50 focus:bg-white border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-sans font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-500">
+                          Mega.nz Password
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="••••••••••••"
+                          value={settingsForm.megaPassword || ""}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, megaPassword: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl bg-slate-50 focus:bg-white border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-sans font-semibold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-blue-50/50 border border-blue-100/50 rounded-xl flex items-start gap-3 mt-4 text-xs text-blue-800 leading-relaxed font-sans">
+                      <div className="text-blue-600 font-extrabold text-base leading-none">ℹ️</div>
+                      <div>
+                        <span className="font-extrabold">Seamless Redundancy:</span> If credentials are left blank or authentication fails, the application automatically falls back to local container disk storage to ensure 100% service uptime.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={settingsSubmitting}
@@ -2906,6 +3057,23 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                   </select>
                 </div>
               </div>
+
+              {userForm.role !== "admin" && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                    Approved Top Up Limit ({settings.currency})
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    placeholder="e.g. 5000"
+                    value={userForm.approvedTopUpAmount}
+                    onChange={(e) => setUserForm({ ...userForm, approvedTopUpAmount: Number(e.target.value) || 0 })}
+                    className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 font-mono placeholder-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+              )}
 
               <button
                 id="save-user-btn"
@@ -3399,7 +3567,6 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                     </label>
                     <input
                       type="text"
-                      required
                       placeholder="e.g. 60 or custom text"
                       value={rowForm.dr}
                       onChange={(e) => setRowForm({ ...rowForm, dr: e.target.value })}
@@ -3484,6 +3651,161 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                       <span>{selectedRow ? "Save Changes" : "Create Record"}</span>
                     </>
                   )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Approve and Edit Deposit Request Modal */}
+      {showApproveDepositModal && selectedDepositForApproval && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-lg overflow-hidden animate-scale-up">
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                  Review & Approve Deposit
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Verify transfer and customize approved credit amount if needed.
+                </p>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowApproveDepositModal(false);
+                  setSelectedDepositForApproval(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer p-1.5 rounded-lg hover:bg-white border border-transparent hover:border-slate-200/50"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleApproveSubmit}>
+              <div className="p-6 space-y-5">
+                {/* Client Profile */}
+                <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 space-y-3">
+                  <h4 className="text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                    Client Details
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Name</span>
+                      <span className="font-bold text-slate-800">{selectedDepositForApproval.userName}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Email</span>
+                      <span className="font-mono text-slate-600 break-all">{selectedDepositForApproval.userEmail}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bank Profile Verification */}
+                <div className="border border-slate-100 rounded-2xl p-4 space-y-3 bg-emerald-50/20">
+                  <h4 className="text-[10px] uppercase tracking-widest font-extrabold text-emerald-600/80 flex items-center gap-1.5">
+                    <span>Registered Bank Account (For Cross-Verification)</span>
+                  </h4>
+                  {selectedDepositForApproval.userBankName ? (
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Bank Name</span>
+                        <span className="font-bold text-emerald-800 bg-emerald-100/50 border border-emerald-200/50 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider inline-block">
+                          {selectedDepositForApproval.userBankName}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Account Title</span>
+                        <span className="font-semibold text-slate-800">{selectedDepositForApproval.userAccountTitle}</span>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-slate-400 block text-[10px]">Account / IBAN Number</span>
+                        <span className="font-mono text-xs font-bold text-slate-700 bg-white border border-slate-150 px-2 py-1 rounded-lg block select-all mt-1">
+                          {selectedDepositForApproval.userAccountNumber}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">No bank profile configured by client.</p>
+                  )}
+                </div>
+
+                {/* Transaction Proof */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="border border-slate-200/60 rounded-2xl p-4 space-y-2 bg-slate-50/50">
+                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">TID (Transaction ID)</span>
+                    <span className="font-mono text-xs font-bold text-slate-700 block">
+                      {selectedDepositForApproval.transactionId && selectedDepositForApproval.transactionId !== "N/A" ? (
+                        selectedDepositForApproval.transactionId
+                      ) : (
+                        <span className="text-slate-400 font-normal italic">None provided</span>
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="border border-slate-200/60 rounded-2xl p-4 space-y-2 bg-slate-50/50 flex flex-col justify-center">
+                    <span className="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Screenshot Proof</span>
+                    {selectedDepositForApproval.screenshot ? (
+                      <a
+                        href={`${selectedDepositForApproval.screenshot}?token=${token}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-bold hover:underline"
+                      >
+                        <span>View Attachment</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">No receipt attached</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Amount Review & Editable Input */}
+                <div className="space-y-2">
+                  <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-500">
+                    Deposit Amount to Approve & Credit
+                  </label>
+                  <p className="text-[11px] text-slate-400">
+                    Admin can edit this value before approval (e.g. if partial transfer or fee adjustments are made).
+                  </p>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <span className="text-slate-500 font-bold text-xs font-mono">{settings.currency}</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      min="0.01"
+                      value={approvalAmount}
+                      onChange={(e) => setApprovalAmount(e.target.value)}
+                      className="w-full pl-16 pr-4 py-3.5 text-sm font-bold font-mono text-slate-800 rounded-2xl border border-slate-200 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 focus:outline-none transition-all shadow-xs"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowApproveDepositModal(false);
+                    setSelectedDepositForApproval(null);
+                  }}
+                  className="px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-blue-500/10 hover:shadow-blue-500/20 cursor-pointer flex items-center gap-1.5"
+                >
+                  <CheckCircle size={14} />
+                  <span>Approve & Credit Balance</span>
                 </button>
               </div>
             </form>

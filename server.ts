@@ -10,6 +10,7 @@ import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import bcrypt from "bcryptjs";
 import { db } from "./src/server/db.js";
+import { uploadToMega, downloadFromMega } from "./src/server/mega.js";
 import { sendNotificationEmail, sendAdminVerificationEmail } from "./src/server/email.js";
 import {
   createSession,
@@ -177,6 +178,7 @@ app.post("/api/auth/register", (req, res) => {
     phone,
     role: "user",
     balance: 0,
+    approvedTopUpAmount: 0,
     status: "active",
     createdAt: new Date().toISOString(),
   };
@@ -279,7 +281,7 @@ app.get("/api/auth/me", requireAuth, (req: AuthRequest, res) => {
 
 app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
   const user = req.user!;
-  const { name, phone, avatar, password } = req.body;
+  const { name, phone, avatar, password, userBankName, userAccountTitle, userAccountNumber } = req.body;
 
   if (!name || !phone) {
     return res.status(400).json({ error: "Name and phone number are required." });
@@ -289,6 +291,9 @@ app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
     name,
     phone,
     avatar: avatar || user.avatar || null,
+    userBankName: userBankName !== undefined ? userBankName : user.userBankName || "",
+    userAccountTitle: userAccountTitle !== undefined ? userAccountTitle : user.userAccountTitle || "",
+    userAccountNumber: userAccountNumber !== undefined ? userAccountNumber : user.userAccountNumber || "",
   };
 
   if (password && password.trim().length >= 6) {
@@ -309,6 +314,78 @@ app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
 // 💳 DEPOSIT ROUTES
 // ==========================================
 
+app.post("/api/users/instant-topup", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { amount } = req.body;
+    const user = req.user!;
+
+    if (!amount) {
+      return res.status(400).json({ error: "Amount is required." });
+    }
+
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ error: "Please enter a valid positive amount." });
+    }
+
+    const approvedLimit = user.approvedTopUpAmount || 0;
+    if (numericAmount > approvedLimit) {
+      return res.status(400).json({ 
+        error: `apne amount galat dali hai. Approved top up amount is ${db.getSettings().currency} ${approvedLimit.toLocaleString()}.` 
+      });
+    }
+
+    // Direct addition of balance
+    const newBalance = user.balance + numericAmount;
+    const newApprovedLimit = approvedLimit - numericAmount;
+
+    // Update user in DB
+    const updatedUser = db.updateUser(user.id, { 
+      balance: newBalance,
+      approvedTopUpAmount: newApprovedLimit
+    });
+
+    const currency = db.getSettings().currency;
+
+    // Log approved deposit
+    const newDeposit = {
+      id: "dep_" + Math.random().toString(36).substring(2, 11),
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      amount: numericAmount,
+      paymentMethod: "Direct Topup",
+      transactionId: "TXN_TOPUP_" + Math.random().toString(36).substring(2, 10).toUpperCase(),
+      screenshot: null,
+      status: "approved" as const,
+      createdAt: new Date().toISOString(),
+      reviewedAt: new Date().toISOString()
+    };
+    db.createDeposit(newDeposit);
+
+    // Create Notification
+    db.createNotification({
+      id: "notif_" + Math.random().toString(36).substring(2, 11),
+      userId: user.id,
+      role: "user",
+      title: "Wallet Topped Up 🎉",
+      message: `You successfully topped up ${currency} ${numericAmount.toLocaleString()}! Current Balance: ${currency} ${newBalance.toLocaleString()}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      balance: newBalance,
+      approvedTopUpAmount: newApprovedLimit,
+      user: updatedUser
+    });
+  } catch (error: any) {
+    console.error("Error topping up:", error);
+    res.status(500).json({ error: "Failed to top up wallet." });
+  }
+});
+
 app.post("/api/deposits", requireAuth, (req, res, next) => {
   uploadScreenshot.single("screenshot")(req, res, (err) => {
     if (err) {
@@ -322,8 +399,8 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
     const { amount, paymentMethod, transactionId } = req.body;
     const user = req.user!;
 
-    if (!amount || !paymentMethod || !transactionId) {
-      return res.status(400).json({ error: "Deposit amount, payment method, and transaction ID are required." });
+    if (!amount || !paymentMethod) {
+      return res.status(400).json({ error: "Deposit amount and payment method are required." });
     }
 
     const depositAmount = parseFloat(amount);
@@ -333,6 +410,15 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
 
     const screenshotPath = req.file ? `/api/deposits/screenshot/${req.file.filename}` : null;
 
+    if (req.file) {
+      try {
+        const fileBuffer = fs.readFileSync(req.file.path);
+        await uploadToMega(req.file.filename, fileBuffer);
+      } catch (err) {
+        console.error("⚠️ Background MEGA upload failed for screenshot:", err);
+      }
+    }
+
     const newDeposit: DepositRequest = {
       id: "dep_" + Math.random().toString(36).substring(2, 11),
       userId: user.id,
@@ -340,7 +426,7 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
       userEmail: user.email,
       amount: depositAmount,
       paymentMethod,
-      transactionId,
+      transactionId: transactionId || "N/A",
       screenshot: screenshotPath,
       status: "pending",
       createdAt: new Date().toISOString(),
@@ -369,7 +455,7 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
         "User Email": user.email,
         "Deposit Amount": `${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
         "Payment Method": paymentMethod,
-        "Transaction ID": transactionId,
+        "Transaction ID": transactionId || "N/A",
         "Request Date": new Date().toLocaleString(),
       },
     });
@@ -384,7 +470,18 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
 app.get("/api/deposits", requireAuth, (req: AuthRequest, res) => {
   const user = req.user!;
   if (user.role === "admin") {
-    res.json(db.getDeposits());
+    const deposits = db.getDeposits();
+    // Enrich with user's current bank details so it is always up to date
+    const enriched = deposits.map(d => {
+      const u = db.getUserById(d.userId);
+      return {
+        ...d,
+        userBankName: u?.userBankName || "",
+        userAccountTitle: u?.userAccountTitle || "",
+        userAccountNumber: u?.userAccountNumber || ""
+      };
+    });
+    res.json(enriched);
   } else {
     res.json(db.getDepositsByUserId(user.id));
   }
@@ -392,7 +489,7 @@ app.get("/api/deposits", requireAuth, (req: AuthRequest, res) => {
 
 app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { status } = req.body; // "approved" | "rejected"
+  const { status, amount } = req.body; // status: "approved" | "rejected", amount is optional edited amount
 
   if (status !== "approved" && status !== "rejected") {
     return res.status(400).json({ error: "Status must be 'approved' or 'rejected'." });
@@ -412,6 +509,15 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
     return res.status(404).json({ error: "User associated with this deposit was not found." });
   }
 
+  let finalAmount = deposit.amount;
+  if (status === "approved" && amount !== undefined) {
+    const parsedAmount = parseFloat(amount);
+    if (!isNaN(parsedAmount) && parsedAmount > 0) {
+      finalAmount = parsedAmount;
+      db.updateDeposit(id, { amount: finalAmount });
+    }
+  }
+
   // Update status
   const updatedDeposit = db.updateDeposit(id, {
     status,
@@ -421,8 +527,8 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
   const currency = db.getSettings().currency;
 
   if (status === "approved") {
-    // Add wallet balance
-    const newBalance = targetUser.balance + deposit.amount;
+    // Direct addition of balance as requested: "amount balance main show ho jani chaiye"
+    const newBalance = (targetUser.balance || 0) + finalAmount;
     db.updateUser(targetUser.id, { balance: newBalance });
 
     // Notify User
@@ -430,8 +536,8 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
       id: "notif_" + Math.random().toString(36).substring(2, 11),
       userId: targetUser.id,
       role: "user",
-      title: "Deposit Request Approved",
-      message: `Your deposit of ${currency} ${deposit.amount.toLocaleString()} was approved! Current Balance: ${currency} ${newBalance.toLocaleString()}`,
+      title: "Deposit Request Approved 🎉",
+      message: `Your deposit of ${currency} ${finalAmount.toLocaleString()} has been approved and added directly to your wallet balance! Current Balance: ${currency} ${newBalance.toLocaleString()}`,
       read: false,
       createdAt: new Date().toISOString(),
     });
@@ -442,7 +548,7 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
       userId: targetUser.id,
       role: "user",
       title: "Deposit Request Rejected",
-      message: `Your deposit of ${currency} ${deposit.amount.toLocaleString()} (Txn ID: ${deposit.transactionId}) was rejected. Please contact support.`,
+      message: `Your deposit of ${currency} ${finalAmount.toLocaleString()} (Txn ID: ${deposit.transactionId}) was rejected. Please contact support.`,
       read: false,
       createdAt: new Date().toISOString(),
     });
@@ -452,9 +558,21 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
 });
 
 // Securely serve deposit screenshots to authenticated users
-app.get("/api/deposits/screenshot/:filename", requireAuth, (req: AuthRequest, res) => {
+app.get("/api/deposits/screenshot/:filename", requireAuth, async (req: AuthRequest, res) => {
   const { filename } = req.params;
   const filePath = path.join(SCREENSHOTS_DIR, filename);
+
+  if (!fs.existsSync(filePath)) {
+    try {
+      const megaBuffer = await downloadFromMega(filename);
+      if (megaBuffer) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, megaBuffer);
+      }
+    } catch (err) {
+      console.error("⚠️ Failed to restore screenshot from MEGA:", err);
+    }
+  }
 
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: "Screenshot not found." });
@@ -554,6 +672,15 @@ app.post("/api/orders", requireAuth, (req, res, next) => {
       attachedFileName: req.file ? req.file.originalname : null,
     };
 
+    if (req.file) {
+      try {
+        const fileBuffer = fs.readFileSync(req.file.path);
+        await uploadToMega(req.file.filename, fileBuffer);
+      } catch (err) {
+        console.error("⚠️ Background MEGA upload failed for order attachment:", err);
+      }
+    }
+
     db.createOrder(newOrder);
 
     // Send System Notification to Admin
@@ -628,6 +755,15 @@ app.post(
       }
 
       const reportPath = req.file ? `/api/orders/${order.id}/download-pdf?file=${req.file.filename}` : order.pdfReport;
+
+      if (req.file) {
+        try {
+          const fileBuffer = fs.readFileSync(req.file.path);
+          await uploadToMega(req.file.filename, fileBuffer);
+        } catch (err) {
+          console.error("⚠️ Background MEGA upload failed for completed report:", err);
+        }
+      }
 
       const updatedOrder = db.updateOrder(id, {
         status: "completed",
@@ -708,7 +844,7 @@ app.delete("/api/orders/:id", requireAdmin, (req: AuthRequest, res) => {
 });
 
 // Secure PDF download route - strictly checks user ownership or admin status
-app.get("/api/orders/:id/download-pdf", requireAuth, (req: AuthRequest, res) => {
+app.get("/api/orders/:id/download-pdf", requireAuth, async (req: AuthRequest, res) => {
   const { id } = req.params;
   const order = db.getOrderById(id);
 
@@ -726,37 +862,6 @@ app.get("/api/orders/:id/download-pdf", requireAuth, (req: AuthRequest, res) => 
   }
 
   // Resolve file from local storage
-  // Extract file name from stored path or just search reports directory
-  const files = fs.readdirSync(REPORTS_DIR);
-  // Find a file that contains the unique string or matches exactly
-  // If report stored path is `/api/orders/${order.id}/download-pdf`, let's map the report to its filename
-  // Let's list files in the REPORTS_DIR and match files.
-  // Wait, let's look at the filenames in reportsStorage: "report-<unique>-<originalName>.pdf"
-  // Since we save reports, let's keep track of original reports or find the newest matching file.
-  // Or better, let's store the filename in a map or save order ID in filename!
-  // Ah! Yes, in multer storage we can save with the order ID: `report-${orderId}.pdf` or similar!
-  // Let's modify the report download logic to look for the file in the reports directory.
-  // Let's check: can we locate the file by scanning files and looking for the one that starts with report-<something>?
-  // To make it incredibly robust, let's store the exact report filename in the `pdfReport` field,
-  // or store files as `${order.id}.pdf`! Yes! Saving report file as `${id}.pdf` is absolutely bulletproof and clean.
-  // Let's adjust the file search. We can find the file that matches the order ID, or just download the file that corresponds to the name.
-  // Let's search the reports directory for a file that starts with "report-" or matches.
-  // Wait, let's make reportsStorage use a naming convention with order ID, e.g. `report-${req.params.id}.pdf`!
-  // Let's check how multer storage works: multer resolves filename BEFORE route handler executes, but `req.params.id` is available in `req.params`!
-  // Yes! `req.params.id` is available in multer diskStorage filename callback!
-  // Let's write a lookup function that matches the filename stored in the order object.
-  // When multer completes, we save the relative path or filename in `order.pdfReport`, e.g., `/api/orders/${order.id}/download-pdf`
-  // And let's store the raw file name in a property, or simply match the filename in reports directory.
-  // Let's find any file in the directory that contains the ID of the order or look up files.
-  // Since reportsStorage creates a filename like: `report-123456789.pdf`, we can store the exact filename in `order.pdfReport` as the filename itself, e.g. `report-123456789.pdf`.
-  // Then when downloading, we serve `path.join(REPORTS_DIR, filename)`.
-  // Let's do that! That is 100% stable, secure, and clear.
-  // Let's check: when updating report, we set:
-  // `pdfReport: req.file.filename`
-  // Then the download link is: `/api/orders/${order.id}/download-pdf`
-  // And in the download route, we serve: `res.download(path.join(REPORTS_DIR, order.pdfReport))`
-  // This is absolutely perfect! Let's implement this logic below.
-
   let filename = req.query.file as string;
   if (!filename && order.pdfReport) {
     if (order.pdfReport.includes("?file=")) {
@@ -782,6 +887,19 @@ app.get("/api/orders/:id/download-pdf", requireAuth, (req: AuthRequest, res) => 
 
   // Find file in REPORTS_DIR
   const filePath = path.join(REPORTS_DIR, filename);
+
+  if (!fs.existsSync(filePath)) {
+    try {
+      const megaBuffer = await downloadFromMega(filename);
+      if (megaBuffer) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, megaBuffer);
+      }
+    } catch (err) {
+      console.error("⚠️ Failed to restore report from MEGA:", err);
+    }
+  }
+
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: "Report file not found on disk." });
   }
@@ -807,7 +925,7 @@ app.get("/api/orders/:id/download-pdf", requireAuth, (req: AuthRequest, res) => 
 });
 
 // Secure attachment download route for campaign order files
-app.get("/api/orders/:id/download-attachment", requireAuth, (req: AuthRequest, res) => {
+app.get("/api/orders/:id/download-attachment", requireAuth, async (req: AuthRequest, res) => {
   const { id } = req.params;
   const order = db.getOrderById(id);
 
@@ -838,6 +956,19 @@ app.get("/api/orders/:id/download-attachment", requireAuth, (req: AuthRequest, r
   }
 
   const filePath = path.join(ATTACHMENTS_DIR, filename);
+
+  if (!fs.existsSync(filePath)) {
+    try {
+      const megaBuffer = await downloadFromMega(filename);
+      if (megaBuffer) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, megaBuffer);
+      }
+    } catch (err) {
+      console.error("⚠️ Failed to restore attachment from MEGA:", err);
+    }
+  }
+
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: "Attachment file not found on disk." });
   }
@@ -856,14 +987,19 @@ app.get("/api/admin/users", requireAdmin, (req, res) => {
 
 app.put("/api/admin/users/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
-  const { name, phone, status, role } = req.body;
+  const { name, phone, status, role, approvedTopUpAmount } = req.body;
 
   const targetUser = db.getUserById(id);
   if (!targetUser) {
     return res.status(404).json({ error: "User not found." });
   }
 
-  const updatedUser = db.updateUser(id, { name, phone, status, role });
+  const updates: Partial<User> = { name, phone, status, role };
+  if (approvedTopUpAmount !== undefined) {
+    updates.approvedTopUpAmount = Number(approvedTopUpAmount) || 0;
+  }
+
+  const updatedUser = db.updateUser(id, updates);
   res.json({ success: true, user: updatedUser });
 });
 
@@ -1013,15 +1149,15 @@ app.get("/api/dashboard-rows", requireAuth, (req: AuthRequest, res) => {
 // Create a new dashboard row (Admin only)
 app.post("/api/admin/dashboard-rows", requireAdmin, (req, res) => {
   const { category, da, dr, price, status, total, tab } = req.body;
-  if (!category || da === undefined || dr === undefined || price === undefined) {
-    return res.status(400).json({ error: "Category, DA, DR, and Price are required." });
+  if (!category || da === undefined || price === undefined) {
+    return res.status(400).json({ error: "Category, DA, and Price are required." });
   }
 
   const newRow = {
     id: "db_row_" + Math.random().toString(36).substring(2, 11),
     category,
     da: String(da),
-    dr: String(dr),
+    dr: dr !== undefined && dr !== null ? String(dr) : "",
     price: price === "" ? "" : (isNaN(Number(price)) ? String(price) : Number(price)),
     status: status ? String(status).trim() : "",
     total: total ? String(total).trim() : "",
@@ -1041,7 +1177,7 @@ app.put("/api/admin/dashboard-rows/:id", requireAdmin, (req, res) => {
   const updates: any = {};
   if (category !== undefined) updates.category = category;
   if (da !== undefined) updates.da = String(da);
-  if (dr !== undefined) updates.dr = String(dr);
+  if (dr !== undefined) updates.dr = dr !== null && dr !== undefined ? String(dr) : "";
   if (price !== undefined) updates.price = price === "" ? "" : (isNaN(Number(price)) ? String(price) : Number(price));
   if (status !== undefined) updates.status = String(status).trim();
   if (total !== undefined) updates.total = String(total).trim();
@@ -1104,6 +1240,20 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+    
+    // Add SPA fallback in development mode to prevent 404 on reloads
+    app.get("*", async (req, res, next) => {
+      if (req.originalUrl.startsWith("/api")) {
+        return next();
+      }
+      try {
+        let template = fs.readFileSync(path.resolve(process.cwd(), "index.html"), "utf-8");
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));

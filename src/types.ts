@@ -16,9 +16,13 @@ export interface User {
   phone: string;
   role: UserRole;
   balance: number; // in PKR (or configured currency)
+  approvedTopUpAmount?: number; // approved by admin for next topup
   status: UserStatus;
   createdAt: string;
   avatar?: string | null; // Base64 or local filepath
+  userBankName?: string;
+  userAccountTitle?: string;
+  userAccountNumber?: string;
 }
 
 export interface Order {
@@ -51,6 +55,9 @@ export interface DepositRequest {
   status: DepositStatus;
   createdAt: string;
   reviewedAt: string | null;
+  userBankName?: string;
+  userAccountTitle?: string;
+  userAccountNumber?: string;
 }
 
 export interface Notification {
@@ -96,6 +103,8 @@ export interface AppSettings {
   domainListFile?: string | null; // Attached file for Domain List
   domainListFileName?: string | null; // Filename for attached Domain List
   domainListUrl?: string | null; // Google Sheet/External Link for Domain List
+  megaEmail?: string | null; // Email login for MEGA.nz
+  megaPassword?: string | null; // Password login for MEGA.nz
 }
 
 export interface DashboardRow {
