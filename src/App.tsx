@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   logo: "WeBacklinks",
   currency: "PKR",
   depositInstructions: "",
-  contactEmail: "support@webacklinks.com",
+  contactEmail: "mail@webacklinks.com",
   smtpEmail: "",
   smtpHost: "",
   smtpPort: 587,

@@ -35,6 +35,7 @@ import {
   UploadCloud,
   Mail,
   Phone,
+  Globe,
   Table,
   Link2,
   Search,
@@ -44,6 +45,7 @@ import {
 } from "lucide-react";
 import { User, Order, DepositRequest, Notification, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
+import { motion } from "motion/react";
 
 interface UserDashboardProps {
   user: User;
@@ -111,6 +113,8 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
   const [profilePhone, setProfilePhone] = useState<string>(user.phone);
   const [profileAvatar, setProfileAvatar] = useState<string>(user.avatar || "");
   const [profilePassword, setProfilePassword] = useState<string>("");
+  const [passwordVerificationCode, setPasswordVerificationCode] = useState<string>("");
+  const [showPasswordCodeVerification, setShowPasswordCodeVerification] = useState<boolean>(false);
   const [profileSuccess, setProfileSuccess] = useState<string>("");
   const [profileError, setProfileError] = useState<string>("");
   const [profileSubmitting, setProfileSubmitting] = useState<boolean>(false);
@@ -218,8 +222,38 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
     e.preventDefault();
     setProfileError("");
     setProfileSuccess("");
-    setProfileSubmitting(true);
 
+    // If password change is requested but verification code is not shown yet
+    if (profilePassword && profilePassword.trim().length > 0 && !showPasswordCodeVerification) {
+      if (profilePassword.trim().length < 6) {
+        setProfileError("Password must be at least 6 characters in length.");
+        return;
+      }
+      setProfileSubmitting(true);
+      try {
+        const res = await fetch("/api/users/profile/request-password-code", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ password: profilePassword }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to send verification code.");
+        }
+        setShowPasswordCodeVerification(true);
+        setProfileSuccess(`📨 A secure 6-digit verification code has been sent to your email: ${user.email}. Please enter it below.`);
+      } catch (err: any) {
+        setProfileError(err.message);
+      } finally {
+        setProfileSubmitting(false);
+      }
+      return;
+    }
+
+    setProfileSubmitting(true);
     try {
       const res = await fetch("/api/users/profile", {
         method: "PUT",
@@ -232,6 +266,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           phone: profilePhone,
           avatar: profileAvatar,
           password: profilePassword || undefined,
+          code: passwordVerificationCode || undefined,
         }),
       });
 
@@ -240,8 +275,10 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
         throw new Error(data.error || "Profile update failed.");
       }
 
-      setProfileSuccess("🎉 Profile and avatar updated successfully!");
+      setProfileSuccess(profilePassword ? "🔒 Security password and profile updated successfully!" : "🎉 Profile and avatar updated successfully!");
       setProfilePassword("");
+      setPasswordVerificationCode("");
+      setShowPasswordCodeVerification(false);
       onUpdateUser(data.user);
       setTimeout(() => setProfileSuccess(""), 3500);
     } catch (err: any) {
@@ -431,6 +468,39 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
     }
   }, [showInstantTopUpModal, showTopUpModal]);
 
+  const playNotificationSound = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      
+      const playTone = (delay: number, pitch: number, duration: number, volume: number = 0.5) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(pitch, ctx.currentTime + delay);
+        
+        gain.gain.setValueAtTime(0, ctx.currentTime + delay);
+        gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + delay + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + duration);
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + duration);
+      };
+
+      // Crisp cash-register retro coin sound
+      playTone(0, 987.77, 0.08, 0.35); // B5
+      playTone(0.08, 1318.51, 0.35, 0.45); // E6
+      playTone(0.08, 2637.02, 0.20, 0.12); // E7 (high overtone metallic sheen)
+    } catch (err) {
+      console.error("Audio error:", err);
+    }
+  };
+
   const fetchUserData = async (silent: boolean = false) => {
     try {
       if (!silent) setLoadingTable(true);
@@ -446,7 +516,17 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
 
       if (ordersRes.ok) setOrders(await ordersRes.json());
       if (depositsRes.ok) setDeposits(await depositsRes.json());
-      if (notifsRes.ok) setNotifications(await notifsRes.json());
+      if (notifsRes.ok) {
+        const newNotifs = await notifsRes.json();
+        setNotifications(prev => {
+          const prevUnreadCount = prev.filter(n => !n.read).length;
+          const newUnreadCount = newNotifs.filter(n => !n.read).length;
+          if (newUnreadCount > prevUnreadCount && prev.length > 0) {
+            playNotificationSound();
+          }
+          return newNotifs;
+        });
+      }
       if (tableRes.ok) {
         const rows = await tableRes.json();
         setDashboardRows(rows);
@@ -474,6 +554,18 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
         headers: { Authorization: `Bearer ${token}` },
       });
       setNotifications(notifications.map(n => ({ ...n, read: true })));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const clearNotifications = async () => {
+    try {
+      await fetch("/api/notifications/clear", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setNotifications([]);
     } catch (e) {
       console.error(e);
     }
@@ -553,7 +645,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
       
       // Open Congrats Modal with detailed message
       setCongratsType("order");
-      setCongratsDetails(`Your premium SEO Backlink Campaign order for ${orderQty} × ${orderCategory} has been deployed successfully! ${settings.currency} ${subtotal.toLocaleString()} was deducted from your wallet credit balance.`);
+      setCongratsDetails("Your order has been placed successfully!");
       setShowCongratsModal(true);
 
       // Soft refresh in the background so they see updated counts instantly
@@ -858,14 +950,21 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
             <button
               id="nav-user-history"
               onClick={() => setActiveTab("history")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border cursor-pointer ${
                 activeTab === "history"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                   : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
               }`}
             >
-              <History size={13} />
-              <span>Order History</span>
+              <span className="flex items-center gap-2.5">
+                <History size={13} />
+                <span>Order History</span>
+              </span>
+              {notifications.filter(n => !n.read && n.title?.includes("Order Completed")).length > 0 && (
+                <span className="font-mono text-[9px] bg-rose-500 text-white px-2 py-0.5 rounded-full font-bold">
+                  {notifications.filter(n => !n.read && n.title?.includes("Order Completed")).length}
+                </span>
+              )}
             </button>
 
             <button
@@ -897,6 +996,15 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
             </a>
           </div>
           <div className="p-4 pt-1 pb-4 flex flex-col gap-2 items-center justify-center">
+            <a
+              href="https://whatsapp.com/channel/0029VbDeCP06LwHjGT5prQ0m"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] uppercase tracking-widest rounded-xl transition-all w-full text-center shadow-xs shadow-blue-500/10 cursor-pointer"
+            >
+              <Globe size={11} />
+              <span>Join Community</span>
+            </a>
             <a
               href="https://wa.me/923235854582"
               target="_blank"
@@ -1055,14 +1163,21 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               )}
               <button
                 onClick={() => { setActiveTab("history"); setMobileMenuOpen(false); }}
-                className={`w-full flex items-center gap-2.5 p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
+                className={`w-full flex items-center justify-between p-2 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all cursor-pointer ${
                   activeTab === "history"
                     ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-600 shadow-sm"
                     : "bg-white text-slate-800 border-slate-200/60 hover:bg-slate-100"
                 }`}
               >
-                <History size={13} />
-                <span>Order History</span>
+                <span className="flex items-center gap-2.5">
+                  <History size={13} />
+                  <span>Order History</span>
+                </span>
+                {notifications.filter(n => !n.read && n.title?.includes("Order Completed")).length > 0 && (
+                  <span className="font-mono text-[9px] bg-rose-500 text-white px-2 py-0.5 rounded-full font-bold">
+                    {notifications.filter(n => !n.read && n.title?.includes("Order Completed")).length}
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => { setActiveTab("profile"); setMobileMenuOpen(false); }}
@@ -1090,12 +1205,21 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
           {/* Mobile Drawer Support & Credits */}
           <div className="border-t border-slate-100 pt-4 text-center">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2.5">Support: <a href={`mailto:${settings.contactEmail}`} className="text-blue-600 hover:underline break-all">{settings.contactEmail}</a></p>
-            <div className="flex flex-col items-center gap-2 justify-center">
+            <div className="flex flex-col items-center gap-2 justify-center w-full max-w-xs mx-auto px-4">
+              <a
+                href="https://whatsapp.com/channel/0029VbDeCP06LwHjGT5prQ0m"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg transition-all shadow-xs w-full text-center cursor-pointer"
+              >
+                <Globe size={11} />
+                <span>Join Community</span>
+              </a>
               <a
                 href="https://wa.me/923235854582"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-1.5 py-2 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg transition-all shadow-xs"
+                className="inline-flex items-center justify-center gap-1.5 py-2 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-widest rounded-lg transition-all shadow-xs w-full text-center cursor-pointer"
               >
                 <Phone size={11} />
                 <span>Support on WhatsApp</span>
@@ -1604,8 +1728,9 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                   </div>
                 </div>
                 <div className="mt-4">
-                  <div className="text-3xl font-bold text-slate-900 font-sans">
-                    {settings.currency} {totalSpent.toLocaleString()}
+                  <div className="text-3xl font-bold text-slate-900 font-sans flex items-baseline gap-1.5">
+                    <span>{totalSpent.toLocaleString()}</span>
+                    <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider">{settings.currency}</span>
                   </div>
                   <div className="text-[10px] text-slate-500 uppercase tracking-wide mt-2 font-medium">Spent on completed orders</div>
                 </div>
@@ -1751,23 +1876,47 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                 {/* Notification Feed */}
                 <div className="p-6 rounded-2xl bg-white border border-slate-200 flex flex-col h-full max-h-[460px] shadow-xs">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-                    <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 flex items-center gap-2">
-                      <Bell size={14} className="text-blue-500" />
-                      Notifications
-                      {notifications.filter(n => !n.read).length > 0 && (
-                        <span className="w-4 h-4 bg-red-500 rounded text-[9px] text-white flex items-center justify-center font-bold">
-                          {notifications.filter(n => !n.read).length}
-                        </span>
-                      )}
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 flex items-center gap-3">
+                      <div className="relative">
+                        <motion.button
+                          whileTap={{ scale: 0.9 }}
+                          whileHover={{ scale: 1.15 }}
+                          onClick={() => {
+                            markNotificationsAsRead();
+                          }}
+                          className="w-8 h-8 flex items-center justify-center text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-full cursor-pointer focus:outline-none transition-all shadow-xs border border-blue-100"
+                          title="Notifications"
+                        >
+                          <Bell size={15} className="fill-blue-500/20" />
+                        </motion.button>
+                        {notifications.filter(n => !n.read).length > 0 && (
+                          <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                            <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-500 text-[8px] font-bold text-white items-center justify-center">
+                              {notifications.filter(n => !n.read).length}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      <span>Notifications</span>
                     </h3>
-                    {notifications.filter(n => !n.read).length > 0 && (
-                      <button
-                        onClick={markNotificationsAsRead}
-                        className="text-[10px] uppercase tracking-wider text-slate-400 hover:text-slate-600 cursor-pointer font-bold"
-                      >
-                        Mark all read
-                      </button>
-                    )}
+                    <div className="flex items-center gap-3">
+                      {notifications.filter(n => !n.read).length > 0 && (
+                        <button
+                          onClick={markNotificationsAsRead}
+                          className="text-[10px] uppercase tracking-wider text-blue-600 hover:text-blue-800 cursor-pointer font-bold transition-colors"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={clearNotifications}
+                          className="text-[10px] uppercase tracking-wider text-red-500 hover:text-red-700 cursor-pointer font-bold transition-colors"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {notifications.length === 0 ? (
@@ -2626,6 +2775,31 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               )}
             </div>
 
+            {notifications.filter(n => !n.read && n.title?.includes("Order Completed")).length > 0 && (
+              <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in shadow-xs">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold shrink-0">✓</div>
+                  <div>
+                    <p className="font-bold">New Completed Orders! 🎉</p>
+                    <p className="text-slate-600 mt-0.5">Some of your premium backlink campaigns have been completed successfully. See the reports in the history table below.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    const updatedNotifs = notifications.map(n => n.title?.includes("Order Completed") ? { ...n, read: true } : n);
+                    setNotifications(updatedNotifs);
+                    fetch("/api/notifications/read", {
+                      method: "POST",
+                      headers: { Authorization: `Bearer ${token}` }
+                    }).catch(console.error);
+                  }}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg transition-all shrink-0 cursor-pointer text-center"
+                >
+                  Dismiss Badge
+                </button>
+              </div>
+            )}
+
             {/* Orders Log */}
             <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm">
               <h3 className="text-xs font-bold uppercase tracking-widest text-slate-700 mb-4">Backlink Orders History</h3>
@@ -2882,10 +3056,35 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                         placeholder="••••••••••••"
                         value={profilePassword}
                         onChange={(e) => setProfilePassword(e.target.value)}
-                        className="w-full px-4 py-3 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                        disabled={showPasswordCodeVerification}
+                        className="w-full px-4 py-3 rounded-lg bg-white border border-slate-200 text-slate-800 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors disabled:bg-slate-50 disabled:text-slate-400"
                       />
                       <p className="text-[10px] text-slate-500 mt-2 font-mono">Password must be at least 6 characters in length.</p>
                     </div>
+
+                    {showPasswordCodeVerification && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -10 }} 
+                        animate={{ opacity: 1, y: 0 }} 
+                        className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3"
+                      >
+                        <label className="block text-[10px] uppercase tracking-widest text-blue-900 font-bold">
+                          Enter 6-Digit Email Verification Code
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={6}
+                          placeholder="e.g. 123456"
+                          value={passwordVerificationCode}
+                          onChange={(e) => setPasswordVerificationCode(e.target.value.replace(/\D/g, ""))}
+                          className="w-full text-center tracking-[12px] font-mono text-lg font-bold px-4 py-2.5 rounded-lg bg-white border border-blue-200 text-blue-950 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                        />
+                        <p className="text-[10px] text-blue-600 font-semibold">
+                          We sent a security code to <span className="font-bold underline">{user.email}</span>. Please verify it is you.
+                        </p>
+                      </motion.div>
+                    )}
                   </div>
 
                   <button
@@ -3385,7 +3584,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
               <div className="flex items-center gap-2.5">
                 <PlusCircle size={22} className="text-blue-100" />
                 <div>
-                  <h3 className="font-sans font-bold text-base leading-none text-white">Log Deposit Top Up</h3>
+                  <h3 className="font-sans font-bold text-base leading-none text-white">Top Up</h3>
                   <p className="text-[10px] text-blue-100/85 uppercase tracking-widest font-mono mt-1">Submit transaction details for credit approval</p>
                 </div>
               </div>
@@ -3572,7 +3771,7 @@ export default function UserDashboard({ user, token, settings, onLogout, onUpdat
                     ) : (
                       <>
                         <Send size={13} />
-                        <span>Submit Log</span>
+                        <span>Submit</span>
                       </>
                     )}
                   </button>

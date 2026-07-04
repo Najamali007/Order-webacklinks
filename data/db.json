@@ -21,6 +21,17 @@
       "balance": 12670,
       "status": "active",
       "createdAt": "2026-06-15T09:30:00.000Z"
+    },
+    {
+      "id": "usr_super_admin",
+      "name": "Super Admin",
+      "email": "najam786ali@yahoo.com",
+      "password": "$2b$10$JpoU/pq6dhmv4F3jWsyQNOmcnRjpB8TxRhnglWqKsxm3Q18RQqjN6",
+      "phone": "+923000000000",
+      "role": "admin",
+      "balance": 999999,
+      "status": "active",
+      "createdAt": "2026-07-03T22:39:33.869Z"
     }
   ],
   "orders": [
@@ -143,12 +154,12 @@
     "logo": "WeBacklinks",
     "currency": "PKR",
     "depositInstructions": "Please send the amount to Easypaisa / JazzCash / Bank Account:\n\n- Easypaisa: 0300-1234567 (Title: SEO Hub Admin)\n- Bank Account: Allied Bank 0123456789 (Title: SEO Backlink Platform)\n\nAfter sending, input the Transaction ID, Deposit Amount, and Payment Method below.",
-    "contactEmail": "support@webacklinks.com",
-    "smtpEmail": "smtp-admin@webacklinks.com",
-    "smtpHost": "smtp.mailtrap.io",
-    "smtpPort": 2525,
-    "smtpUser": "your-smtp-username",
-    "smtpPass": "your-smtp-password",
+    "contactEmail": "mail@webacklinks.com",
+    "smtpEmail": "mail@webacklinks.com",
+    "smtpHost": "smtp.hostinger.com",
+    "smtpPort": 587,
+    "smtpUser": "mail@webacklinks.com",
+    "smtpPass": "Password7860@",
     "prices": {
       "Web 2.0": 10,
       "Web 2.0 Profile": 10,
@@ -231,6 +242,39 @@
         "accountNumber": "0300-1234567",
         "iban": "N/A"
       }
+    ],
+    "customTabs": [
+      "Authority Backlinks",
+      "High DA Guest Posts"
     ]
-  }
+  },
+  "dashboardRows": [
+    {
+      "id": "db_row_1",
+      "category": "Tech & Gadgets Blogs",
+      "da": "55",
+      "dr": "60",
+      "price": 1500,
+      "status": "Available",
+      "createdAt": "2026-06-20T10:00:00.000Z"
+    },
+    {
+      "id": "db_row_2",
+      "category": "Business & Finance News",
+      "da": "62",
+      "dr": "65",
+      "price": 2500,
+      "status": "Available",
+      "createdAt": "2026-06-21T11:00:00.000Z"
+    },
+    {
+      "id": "db_row_3",
+      "category": "Health & Wellness Sites",
+      "da": "48",
+      "dr": "50",
+      "price": 1200,
+      "status": "Available",
+      "createdAt": "2026-06-22T12:00:00.000Z"
+    }
+  ]
 }

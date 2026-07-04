@@ -34,9 +34,10 @@ import {
   HelpCircle,
   Phone,
   Table,
-  CloudLightning
+  CloudLightning,
+  Bell
 } from "lucide-react";
-import { User, Order, DepositRequest, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
+import { User, Order, DepositRequest, Notification, AppSettings, BACKLINK_CATEGORIES, DashboardRow } from "../types.js";
 import WeBacklinksLogo, { WeBacklinksSiteIcon } from "./WeBacklinksLogo.js";
 
 interface AdminDashboardProps {
@@ -50,13 +51,47 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ user, token, settings, onLogout, onUpdateSettings, onUpdateUser }: AdminDashboardProps) {
   // Navigation
-  const [activeTab, setActiveTab] = useState<"stats" | "users" | "deposits" | "orders" | "settings" | "profile" | "dashboard_data">("stats");
+  const [activeTab, setActiveTab] = useState<"stats" | "users" | "deposits" | "orders" | "settings" | "profile" | "dashboard_data" | "notifications">("stats");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Raw Database states
   const [users, setUsers] = useState<User[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [deposits, setDeposits] = useState<DepositRequest[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const playNotificationSound = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      
+      const playTone = (delay: number, pitch: number, duration: number, volume: number = 0.5) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(pitch, ctx.currentTime + delay);
+        
+        gain.gain.setValueAtTime(0, ctx.currentTime + delay);
+        gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + delay + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + duration);
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + duration);
+      };
+
+      // Crisp cash-register retro coin sound
+      playTone(0, 987.77, 0.08, 0.35); // B5
+      playTone(0.08, 1318.51, 0.35, 0.45); // E6
+      playTone(0.08, 2637.02, 0.20, 0.12); // E7 (high overtone metallic sheen)
+    } catch (err) {
+      console.error("Audio error:", err);
+    }
+  };
 
   // Dashboard Rows States
   const [dashboardRows, setDashboardRows] = useState<DashboardRow[]>([]);
@@ -308,17 +343,29 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
     try {
       if (!silent) setLoadingDashboard(true);
       const headers = { Authorization: `Bearer ${token}` };
-      const [usersRes, ordersRes, depositsRes, rowsRes] = await Promise.all([
+      const [usersRes, ordersRes, depositsRes, rowsRes, notifsRes] = await Promise.all([
         fetch("/api/admin/users", { headers }),
         fetch("/api/orders", { headers }),
         fetch("/api/deposits", { headers }),
         fetch("/api/dashboard-rows", { headers }),
+        fetch("/api/notifications", { headers }),
       ]);
 
       if (usersRes.ok) setUsers(await usersRes.json());
       if (ordersRes.ok) setOrders(await ordersRes.json());
       if (depositsRes.ok) setDeposits(await depositsRes.json());
       if (rowsRes.ok) setDashboardRows(await rowsRes.json());
+      if (notifsRes.ok) {
+        const newNotifs = await notifsRes.json();
+        setNotifications(prev => {
+          const prevUnreadCount = prev.filter(n => !n.read).length;
+          const newUnreadCount = newNotifs.filter(n => !n.read).length;
+          if (newUnreadCount > prevUnreadCount && prev.length > 0) {
+            playNotificationSound();
+          }
+          return newNotifs;
+        });
+      }
     } catch (e) {
       console.error("Failed to load admin databases:", e);
     } finally {
@@ -1121,6 +1168,24 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
           </button>
 
           <button
+            id="admin-nav-notifications"
+            onClick={() => setActiveTab("notifications")}
+            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs uppercase tracking-widest font-bold transition-all cursor-pointer ${
+              activeTab === "notifications" ? "bg-blue-600 text-white shadow-md shadow-blue-500/10" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <Bell size={14} />
+              <span>Notifications</span>
+            </span>
+            {notifications.filter(n => !n.read).length > 0 && (
+              <span className={`font-mono text-[10px] px-2 py-0.5 rounded-full ${activeTab === "notifications" ? "bg-white text-blue-600 font-bold" : "bg-rose-500 text-white font-bold"}`}>
+                {notifications.filter(n => !n.read).length}
+              </span>
+            )}
+          </button>
+
+          <button
             id="admin-nav-profile"
             onClick={() => setActiveTab("profile")}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs uppercase tracking-widest font-bold transition-all cursor-pointer ${
@@ -1257,6 +1322,23 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
             >
               <SettingsIcon size={14} />
               <span>Platform Settings</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab("notifications"); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center justify-between p-3.5 rounded-xl text-xs uppercase tracking-widest font-bold ${
+                activeTab === "notifications" ? "bg-blue-50 text-blue-600 border border-blue-100" : "text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              <span className="flex items-center gap-3">
+                <Bell size={14} />
+                <span>Notifications</span>
+              </span>
+              {notifications.filter(n => !n.read).length > 0 && (
+                <span className="font-mono text-[10px] bg-rose-500 text-white px-2 py-0.5 rounded-full">
+                  {notifications.filter(n => !n.read).length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1762,7 +1844,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                                   }}
                                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg transition-colors cursor-pointer"
                                 >
-                                  Complete Delivery
+                                  Complete
                                 </button>
                               </td>
                             </tr>
@@ -2020,7 +2102,9 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {deposits.map((d) => (
+                      {[...deposits]
+                        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                        .map((d) => (
                         <tr key={d.id} className="hover:bg-slate-50 transition-colors">
                           <td className="py-3.5">
                             <div className="flex flex-col gap-1.5">
@@ -2271,7 +2355,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider shadow-sm transition-all hover:scale-102 cursor-pointer inline-flex items-center gap-1"
                                   title="Deliver & Upload PDF"
                                 >
-                                  <span>Complete Delivery</span>
+                                  <span>Complete</span>
                                 </button>
                               )}
                               {o.status !== "cancelled" && (
@@ -2986,6 +3070,100 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
             </div>
           </div>
         )}
+
+        {/* --- TAB: ADMIN NOTIFICATIONS --- */}
+        {activeTab === "notifications" && (
+          <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+            {/* Header */}
+            <div className="border-b border-slate-200 pb-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h1 className="font-sans text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">
+                  Notifications
+                </h1>
+                <p className="text-slate-500 text-xs uppercase tracking-wider mt-1">
+                  View full logs of registration events, deposits, and backlink orders in real-time.
+                </p>
+              </div>
+              <div className="flex gap-2.5">
+                <button
+                  onClick={async () => {
+                    if (!window.confirm("Are you sure you want to mark all notifications as read?")) return;
+                    try {
+                      await fetch("/api/notifications/read", {
+                        method: "POST",
+                        headers: { Authorization: `Bearer ${token}` }
+                      });
+                      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer border border-blue-100 shadow-sm"
+                >
+                  Mark All Read
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm("Are you sure you want to clear all notifications? This action cannot be undone.")) return;
+                    try {
+                      await fetch("/api/notifications/clear", {
+                        method: "POST",
+                        headers: { Authorization: `Bearer ${token}` }
+                      });
+                      setNotifications([]);
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer border border-red-100 shadow-sm"
+                >
+                  Clear All Logs
+                </button>
+              </div>
+            </div>
+
+            {notifications.length === 0 ? (
+              <div className="p-12 text-center rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col items-center justify-center space-y-4">
+                <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-400">
+                  <Bell size={24} className="opacity-40" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-700">No Notifications</h3>
+                  <p className="text-xs text-slate-400 mt-1 font-mono">Any system activities will be logged here.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm divide-y divide-slate-100 animate-fade-in">
+                {[...notifications]
+                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                  .map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`p-5 transition-all flex items-start gap-4 ${
+                      notif.read ? "bg-white opacity-85" : "bg-blue-50/20 font-medium"
+                    }`}
+                  >
+                    <div className="mt-1 flex-shrink-0">
+                      <span className={`w-2.5 h-2.5 rounded-full block ${notif.read ? "bg-slate-300" : "bg-blue-500"}`} />
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className={`text-xs uppercase tracking-wider ${notif.read ? "text-slate-600" : "text-blue-900 font-bold"}`}>
+                          {notif.title}
+                        </h4>
+                        <div className="text-right text-[10px] text-slate-400 font-mono flex-shrink-0 flex flex-col items-end leading-tight">
+                          <span>{new Date(notif.createdAt).toLocaleDateString()}</span>
+                          <span className="text-[9px] text-slate-500 font-semibold">{new Date(notif.createdAt).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed font-mono whitespace-pre-wrap">{notif.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
     </div>
 
@@ -3298,19 +3476,7 @@ export default function AdminDashboard({ user, token, settings, onLogout, onUpda
                 />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                  Additional Delivery Notes
-                </label>
-                <textarea
-                  id="complete-notes"
-                  rows={3}
-                  placeholder="e.g. Campaign delivered successfully. All backlinks checked against live indexers."
-                  value={completeNotes}
-                  onChange={(e) => setCompleteNotes(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 transition-colors"
-                ></textarea>
-              </div>
+
 
               <button
                 id="complete-submit-btn"

@@ -11,7 +11,14 @@ import multer from "multer";
 import bcrypt from "bcryptjs";
 import { db } from "./src/server/db.js";
 import { uploadToMega, downloadFromMega } from "./src/server/mega.js";
-import { sendNotificationEmail, sendAdminVerificationEmail } from "./src/server/email.js";
+import {
+  sendNotificationEmail,
+  sendAdminVerificationEmail,
+  sendUserVerificationEmail,
+  sendDepositSubmissionAdminEmail,
+  sendDepositApprovalUserEmail,
+  sendProjectCompletionUserEmail
+} from "./src/server/email.js";
 import {
   createSession,
   destroySession,
@@ -23,6 +30,55 @@ import { User, Order, DepositRequest, Notification, AppSettings } from "./src/ty
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+
+// In-memory security and verification tables
+interface PendingReg {
+  user: User;
+  code: string;
+  expiresAt: number;
+}
+const pendingRegistrations = new Map<string, PendingReg>();
+
+interface LockoutState {
+  failedAttempts: number;
+  lockedUntil: number | null;
+}
+const loginAttempts = new Map<string, LockoutState>();
+
+// Strict email validations
+const EMAIL_REGEX = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+const DISPOSABLE_DOMAINS = [
+  "tempmail.com", "temp-mail.org", "mailinator.com", "guerrillamail.com", "yopmail.com",
+  "sharklasers.com", "dispostable.com", "getairmail.com", "tempmailaddress.com",
+  "10minutemail.com", "10minutemail.co.za", "crazymailing.com", "generator.email",
+  "fakemailgenerator.com", "maildrop.cc", "throwawaymail.com", "tempmail.net",
+  "boun.cr", "mailnesia.com", "mailcatch.com", "inboxkitten.com", "moakt.com",
+  "tempmail.dev", "tmpmail.org", "tmpmail.net", "duck.com", "mailinator", "trashmail",
+  "tempmail", "disposable", "getnada.com", "nada.ltd", "dropmail.me", "privatemail.com",
+  "temp-mail.to", "temp-mail.ru", "temp-mail.io", "tempmail.biz", "tempmail.host",
+  "tempmail.space", "tempmail.website", "tempmail.xyz", "tempmail.top", "tempmail.club",
+  "emailondeck.com", "burnermail.io", "guerrillamailblock.com", "guerrillamail.net",
+  "guerrillamail.org", "guerrillamail.biz", "guerrillamail.de"
+];
+
+function isDisposableOrSuspicious(email: string): boolean {
+  const normalized = email.toLowerCase().trim();
+  const domain = normalized.split("@")[1] || "";
+  if (DISPOSABLE_DOMAINS.includes(domain)) return true;
+  // Also catch variations / patterns of typical throwaway emails
+  if (
+    domain.includes("temp") || 
+    domain.includes("trash") || 
+    domain.includes("disposable") || 
+    domain.includes("mailinator") || 
+    domain.includes("yopmail") || 
+    domain.includes("fake")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 
 // Enable JSON body and URL encoded data parsing with large limits
 app.use(express.json({ limit: "50mb" }));
@@ -155,11 +211,21 @@ app.get("/api/site-icon.png", async (req, res) => {
 // 🔐 AUTH ROUTES
 // ==========================================
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   const { name, email, password, phone } = req.body;
 
   if (!name || !email || !password || !phone) {
     return res.status(400).json({ error: "All fields are required." });
+  }
+
+  // 1. Strict Format Validation (Prevents arbitrary special characters)
+  if (!EMAIL_REGEX.test(email)) {
+    return res.status(400).json({ error: "Email address contains invalid special characters or has a wrong format." });
+  }
+
+  // 2. Temp Mail / Disposable Email Check
+  if (isDisposableOrSuspicious(email)) {
+    return res.status(400).json({ error: "Temporary, disposable, or suspicious email domains are not allowed." });
   }
 
   const existingUser = db.getUserByEmail(email);
@@ -170,10 +236,13 @@ app.post("/api/auth/register", (req, res) => {
   const salt = bcrypt.genSaltSync(10);
   const hashedPassword = bcrypt.hashSync(password, salt);
 
+  // Generate 6-digit verification code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+
   const newUser: User = {
     id: "usr_" + Math.random().toString(36).substring(2, 11),
     name,
-    email,
+    email: email.trim(),
     password: hashedPassword,
     phone,
     role: "user",
@@ -183,7 +252,57 @@ app.post("/api/auth/register", (req, res) => {
     createdAt: new Date().toISOString(),
   };
 
-  db.createUser(newUser);
+  // Keep in-memory pending user details for 15 mins
+  pendingRegistrations.set(email.toLowerCase().trim(), {
+    user: newUser,
+    code,
+    expiresAt: Date.now() + 15 * 60 * 1000,
+  });
+
+  // Send registration verification email
+  const emailSent = await sendUserVerificationEmail(email, code);
+  if (!emailSent) {
+    console.warn(`Failed to send verification email to ${email}, fallback simulation active.`);
+  }
+
+  res.status(200).json({
+    success: true,
+    needsVerification: true,
+    email: email.toLowerCase().trim(),
+    message: "A secure verification code has been sent to your email address."
+  });
+});
+
+app.post("/api/auth/verify-signup", (req, res) => {
+  const { email, code } = req.body;
+
+  if (!email || !code) {
+    return res.status(400).json({ error: "Email and verification code are required." });
+  }
+
+  const pending = pendingRegistrations.get(email.toLowerCase().trim());
+  if (!pending) {
+    return res.status(400).json({ error: "No registration in progress or verification code expired. Please register again." });
+  }
+
+  if (pending.expiresAt < Date.now()) {
+    pendingRegistrations.delete(email.toLowerCase().trim());
+    return res.status(400).json({ error: "Verification code has expired. Please register again." });
+  }
+
+  if (pending.code !== code.trim()) {
+    return res.status(400).json({ error: "Incorrect verification code. Please check your email and try again." });
+  }
+
+  // Success: Register user for real
+  pendingRegistrations.delete(email.toLowerCase().trim());
+
+  const existingUser = db.getUserByEmail(pending.user.email);
+  if (existingUser) {
+    return res.status(400).json({ error: "Email address is already registered." });
+  }
+
+  db.createUser(pending.user);
 
   // Send signup notification to admin
   db.createNotification({
@@ -191,16 +310,38 @@ app.post("/api/auth/register", (req, res) => {
     userId: null,
     role: "admin",
     title: "New User Registered",
-    message: `${name} (${email}) has registered an account.`,
+    message: `${pending.user.name} (${pending.user.email}) has successfully verified their email and registered.`,
     read: false,
     createdAt: new Date().toISOString(),
   });
 
-  const token = createSession(newUser.id, newUser.role);
-  
+  const token = createSession(pending.user.id, pending.user.role);
+
   // Strip password before returning
-  const { password: _, ...userWithoutPassword } = newUser;
+  const { password: _, ...userWithoutPassword } = pending.user;
   res.status(201).json({ user: userWithoutPassword, token });
+});
+
+app.post("/api/auth/resend-verification", async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: "Email is required." });
+  }
+
+  const pending = pendingRegistrations.get(email.toLowerCase().trim());
+  if (!pending) {
+    return res.status(400).json({ error: "No pending registration found for this email." });
+  }
+
+  // Generate new code
+  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+  pending.code = newCode;
+  pending.expiresAt = Date.now() + 15 * 60 * 1000;
+  pendingRegistrations.set(email.toLowerCase().trim(), pending);
+
+  await sendUserVerificationEmail(pending.user.email, newCode);
+
+  res.json({ success: true, message: "A new secure verification code has been dispatched." });
 });
 
 app.post("/api/auth/login", (req, res) => {
@@ -210,16 +351,52 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(400).json({ error: "Email and password are required." });
   }
 
+  const emailKey = email.toLowerCase().trim();
+
+  // 1. Lockout Check (Lock for 30 minutes after 5 failures)
+  const lockout = loginAttempts.get(emailKey);
+  if (lockout && lockout.lockedUntil && lockout.lockedUntil > Date.now()) {
+    const minutesLeft = Math.ceil((lockout.lockedUntil - Date.now()) / (1000 * 60));
+    return res.status(429).json({
+      error: `Too many failed attempts. Your account is temporarily locked. Please try again in ${minutesLeft} minutes.`
+    });
+  }
+
+  // 2. Format checks to completely guard login
+  if (!EMAIL_REGEX.test(emailKey) || isDisposableOrSuspicious(emailKey)) {
+    return res.status(400).json({ error: "Invalid email address format or domain." });
+  }
+
   // Enforce security key check for super admin
-  if (email.toLowerCase() === "najam786ali@yahoo.com") {
+  if (emailKey === "najam786ali@yahoo.com") {
     if (!securityKey || securityKey !== "Najam2712ali__!!??@@") {
-      return res.status(401).json({ error: "Access Denied. Incorrect or missing Security Key." });
+      // Record failed attempt for admin too
+      const current = loginAttempts.get(emailKey) || { failedAttempts: 0, lockedUntil: null };
+      current.failedAttempts += 1;
+      if (current.failedAttempts >= 5) {
+        current.lockedUntil = Date.now() + 30 * 60 * 1000;
+        loginAttempts.set(emailKey, current);
+        return res.status(429).json({ error: "Too many failed attempts. This admin channel has been locked for 30 minutes." });
+      }
+      loginAttempts.set(emailKey, current);
+      const remaining = 5 - current.failedAttempts;
+      return res.status(401).json({ error: `Access Denied. Incorrect or missing Security Key. You have ${remaining} attempts remaining.` });
     }
   }
 
-  const user = db.getUserByEmail(email);
+  const user = db.getUserByEmail(emailKey);
   if (!user || !user.password) {
-    return res.status(401).json({ error: "Invalid email or password." });
+    // Record failure
+    const current = loginAttempts.get(emailKey) || { failedAttempts: 0, lockedUntil: null };
+    current.failedAttempts += 1;
+    if (current.failedAttempts >= 5) {
+      current.lockedUntil = Date.now() + 30 * 60 * 1000;
+      loginAttempts.set(emailKey, current);
+      return res.status(429).json({ error: "Too many failed attempts. Your account has been locked for 30 minutes." });
+    }
+    loginAttempts.set(emailKey, current);
+    const remaining = 5 - current.failedAttempts;
+    return res.status(401).json({ error: `Invalid email or password. You have ${remaining} attempts remaining.` });
   }
 
   if (user.status === "inactive") {
@@ -228,8 +405,21 @@ app.post("/api/auth/login", (req, res) => {
 
   const matches = bcrypt.compareSync(password, user.password);
   if (!matches) {
-    return res.status(401).json({ error: "Invalid email or password." });
+    // Record failure
+    const current = loginAttempts.get(emailKey) || { failedAttempts: 0, lockedUntil: null };
+    current.failedAttempts += 1;
+    if (current.failedAttempts >= 5) {
+      current.lockedUntil = Date.now() + 30 * 60 * 1000;
+      loginAttempts.set(emailKey, current);
+      return res.status(429).json({ error: "Too many failed attempts. Your account has been locked for 30 minutes." });
+    }
+    loginAttempts.set(emailKey, current);
+    const remaining = 5 - current.failedAttempts;
+    return res.status(401).json({ error: `Invalid email or password. You have ${remaining} attempts remaining.` });
   }
+
+  // Clear failed login attempts upon successful authentication
+  loginAttempts.delete(emailKey);
 
   const token = createSession(user.id, user.role);
 
@@ -279,9 +469,40 @@ app.get("/api/auth/me", requireAuth, (req: AuthRequest, res) => {
   res.json({ user: userWithoutPassword });
 });
 
+interface PendingPasswordChange {
+  userId: string;
+  code: string;
+  passwordHash: string;
+  expiresAt: number;
+}
+const pendingPasswordChanges = new Map<string, PendingPasswordChange>();
+
+app.post("/api/users/profile/request-password-code", requireAuth, async (req: AuthRequest, res) => {
+  const user = req.user!;
+  const { password } = req.body;
+  if (!password || password.trim().length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters in length." });
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  pendingPasswordChanges.set(user.id, {
+    userId: user.id,
+    code,
+    passwordHash: password,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+
+  const emailSent = await sendUserVerificationEmail(user.email, code);
+  if (!emailSent) {
+    console.warn(`Failed to send password verification email to ${user.email}`);
+  }
+
+  res.json({ success: true, message: `A secure 6-digit verification code has been dispatched to ${user.email}.` });
+});
+
 app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
   const user = req.user!;
-  const { name, phone, avatar, password, userBankName, userAccountTitle, userAccountNumber } = req.body;
+  const { name, phone, avatar, password, code, userBankName, userAccountTitle, userAccountNumber } = req.body;
 
   if (!name || !phone) {
     return res.status(400).json({ error: "Name and phone number are required." });
@@ -297,8 +518,17 @@ app.put("/api/users/profile", requireAuth, (req: AuthRequest, res) => {
   };
 
   if (password && password.trim().length >= 6) {
+    const pending = pendingPasswordChanges.get(user.id);
+    if (!pending || pending.expiresAt < Date.now()) {
+      return res.status(400).json({ error: "Verification code expired or not requested. Please request a code first." });
+    }
+    if (pending.code !== code?.trim()) {
+      return res.status(400).json({ error: "Incorrect verification code. Please check your email and try again." });
+    }
+
     const salt = bcrypt.genSaltSync(10);
     updates.password = bcrypt.hashSync(password, salt);
+    pendingPasswordChanges.delete(user.id);
   }
 
   const updatedUser = db.updateUser(user.id, updates);
@@ -447,17 +677,18 @@ app.post("/api/deposits", requireAuth, (req, res, next) => {
     });
 
     // SMTP Email to Admin
-    await sendNotificationEmail({
-      subject: `Deposit Request Received - ${user.name}`,
-      bodyTitle: "New Wallet Deposit Request",
-      details: {
-        "User Name": user.name,
-        "User Email": user.email,
-        "Deposit Amount": `${db.getSettings().currency} ${depositAmount.toLocaleString()}`,
-        "Payment Method": paymentMethod,
-        "Transaction ID": transactionId || "N/A",
-        "Request Date": new Date().toLocaleString(),
-      },
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const screenshotUrl = screenshotPath ? `${baseUrl}${screenshotPath}` : null;
+    await sendDepositSubmissionAdminEmail({
+      userName: user.name,
+      userEmail: user.email,
+      amount: depositAmount,
+      paymentMethod,
+      transactionId: transactionId || "N/A",
+      userBankName: user.userBankName || "",
+      userAccountTitle: user.userAccountTitle || "",
+      userAccountNumber: user.userAccountNumber || "",
+      screenshot: screenshotUrl
     });
 
     res.status(201).json(newDeposit);
@@ -487,7 +718,7 @@ app.get("/api/deposits", requireAuth, (req: AuthRequest, res) => {
   }
 });
 
-app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
+app.post("/api/deposits/:id/review", requireAdmin, async (req: AuthRequest, res) => {
   const { id } = req.params;
   const { status, amount } = req.body; // status: "approved" | "rejected", amount is optional edited amount
 
@@ -531,7 +762,7 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
     const newBalance = (targetUser.balance || 0) + finalAmount;
     db.updateUser(targetUser.id, { balance: newBalance });
 
-    // Notify User
+    // Notify User via in-app notification
     db.createNotification({
       id: "notif_" + Math.random().toString(36).substring(2, 11),
       userId: targetUser.id,
@@ -540,6 +771,14 @@ app.post("/api/deposits/:id/review", requireAdmin, (req: AuthRequest, res) => {
       message: `Your deposit of ${currency} ${finalAmount.toLocaleString()} has been approved and added directly to your wallet balance! Current Balance: ${currency} ${newBalance.toLocaleString()}`,
       read: false,
       createdAt: new Date().toISOString(),
+    });
+
+    // Send Deposit Approval Email
+    await sendDepositApprovalUserEmail({
+      userEmail: targetUser.email,
+      userName: targetUser.name,
+      amount: finalAmount,
+      newBalance: newBalance
     });
   } else {
     // Notify User about rejection
@@ -784,6 +1023,17 @@ app.post(
         createdAt: new Date().toISOString(),
       });
 
+      // Send Project Completion Email to User
+      await sendProjectCompletionUserEmail({
+        userEmail: order.userEmail,
+        userName: order.userName,
+        orderId: order.id,
+        category: order.category,
+        quantity: order.quantity,
+        deliveryLink: deliveryLink || null,
+        notes: notes || null
+      });
+
       res.json({ success: true, order: updatedOrder });
     } catch (error: any) {
       console.error("❌ Error completing order:", error);
@@ -793,7 +1043,7 @@ app.post(
 );
 
 // Admin can change order status directly (pending, in_progress, completed, cancelled)
-app.put("/api/orders/:id/status", requireAdmin, (req: AuthRequest, res) => {
+app.put("/api/orders/:id/status", requireAdmin, async (req: AuthRequest, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -829,7 +1079,37 @@ app.put("/api/orders/:id/status", requireAdmin, (req: AuthRequest, res) => {
     }
   }
 
-  const updatedOrder = db.updateOrder(id, { status });
+  const updates: Partial<Order> = { status };
+  if (status === "completed" && !order.completionDate) {
+    updates.completionDate = new Date().toISOString();
+  }
+
+  const updatedOrder = db.updateOrder(id, updates);
+
+  if (status === "completed" && order.status !== "completed") {
+    // Notify User
+    db.createNotification({
+      id: "notif_" + Math.random().toString(36).substring(2, 11),
+      userId: order.userId,
+      role: "user",
+      title: "Order Completed 🎉",
+      message: `Your backlink order (ID: ${order.id}) for ${order.quantity} × ${order.category} has been completed! Click to download your report.`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    // Send Project Completion Email to User
+    await sendProjectCompletionUserEmail({
+      userEmail: order.userEmail,
+      userName: order.userName,
+      orderId: order.id,
+      category: order.category,
+      quantity: order.quantity,
+      deliveryLink: order.deliveryLink || null,
+      notes: order.notes || null
+    });
+  }
+
   res.json({ success: true, order: updatedOrder });
 });
 
@@ -1218,6 +1498,12 @@ app.get("/api/notifications", requireAuth, (req: AuthRequest, res) => {
 app.post("/api/notifications/read", requireAuth, (req: AuthRequest, res) => {
   const user = req.user!;
   db.markNotificationsAsRead(user.id);
+  res.json({ success: true });
+});
+
+app.post("/api/notifications/clear", requireAuth, (req: AuthRequest, res) => {
+  const user = req.user!;
+  db.clearNotifications(user.id);
   res.json({ success: true });
 });
 

@@ -19,6 +19,12 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
   const [isRegister, setIsRegister] = useState(false);
   const [isForgot, setIsForgot] = useState(false);
   
+  // Verification states
+  const [showVerification, setShowVerification] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [verifyEmail, setVerifyEmail] = useState("");
+  const [resendSuccess, setResendSuccess] = useState("");
+  
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -67,6 +73,15 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
         throw new Error(data.error || "Something went wrong.");
       }
 
+      if (isRegister && data.needsVerification) {
+        setVerifyEmail(data.email);
+        setShowVerification(true);
+        setIsRegister(false);
+        setError("");
+        setResendSuccess("");
+        return;
+      }
+
       onLoginSuccess(data.user, data.token);
     } catch (err: any) {
       setError(err.message || "Connection failure. Please try again.");
@@ -74,6 +89,55 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
       setLoading(false);
     }
   };
+
+  const handleVerifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setResendSuccess("");
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/auth/verify-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifyEmail, code: verificationCode }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Something went wrong.");
+      }
+
+      onLoginSuccess(data.user, data.token);
+    } catch (err: any) {
+      setError(err.message || "Invalid or expired verification code.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setError("");
+    setResendSuccess("");
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifyEmail }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to resend code.");
+      }
+
+      setResendSuccess(data.message || "A new code has been sent.");
+    } catch (err: any) {
+      setError(err.message || "Failed to resend code.");
+    }
+  };
+
 
   const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -236,16 +300,25 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
           </motion.div>
         </div>
 
-        {/* Support on WhatsApp Button (Replaces Ondigix branding in left bar) */}
-        <div className="mt-auto pt-6 relative z-10">
+        {/* Support on WhatsApp and Community Buttons */}
+        <div className="mt-auto pt-6 relative z-10 flex flex-col sm:flex-row gap-2.5">
           <a
             href="https://wa.me/923235854582"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2.5 w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/20 hover:-translate-y-0.5 active:translate-y-0 group cursor-pointer"
+            className="flex-1 flex items-center justify-center gap-2 py-2 px-3 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/20 hover:-translate-y-0.5 active:translate-y-0 group cursor-pointer text-center"
           >
-            <Phone size={14} className="group-hover:scale-110 transition-transform duration-300" />
-            <span>Support on WhatsApp</span>
+            <Phone size={12} className="group-hover:scale-110 transition-transform duration-300 shrink-0" />
+            <span className="truncate">WhatsApp Support</span>
+          </a>
+          <a
+            href="https://whatsapp.com/channel/0029VbDeCP06LwHjGT5prQ0m"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-2 py-2 px-3 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all shadow-md shadow-blue-500/10 hover:shadow-blue-500/20 hover:-translate-y-0.5 active:translate-y-0 group cursor-pointer text-center"
+          >
+            <Globe size={12} className="group-hover:scale-110 transition-transform duration-300 shrink-0" />
+            <span className="truncate">Join Community</span>
           </a>
         </div>
       </motion.div>
@@ -375,6 +448,108 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
                     className="text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-800 transition-colors cursor-pointer"
                   >
                     Back to Sign In
+                  </button>
+                </div>
+              </motion.div>
+            ) : showVerification ? (
+              // Email Verification View
+              <motion.div
+                key="verify"
+                initial={{ opacity: 0, x: 40 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -40 }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+              >
+                <div className="text-center mb-8">
+                  <div className="mx-auto w-12 h-12 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-4">
+                    <Mail size={24} className="animate-bounce" />
+                  </div>
+                  <h2 className="font-display text-2xl font-semibold tracking-tight text-slate-900">
+                    Verify Your Email
+                  </h2>
+                  <p className="text-slate-500 mt-2 text-xs leading-relaxed max-w-sm mx-auto">
+                    We have dispatched a secure 6-digit confirmation code to <strong className="text-slate-800">{verifyEmail}</strong>. Please enter it below.
+                  </p>
+                </div>
+
+                {error && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs tracking-wide leading-relaxed" 
+                    id="auth-error"
+                  >
+                    {error}
+                  </motion.div>
+                )}
+
+                {resendSuccess && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-6 p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs tracking-wide leading-relaxed" 
+                  >
+                    {resendSuccess}
+                  </motion.div>
+                )}
+
+                <form onSubmit={handleVerifySubmit} className="space-y-5">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 text-center">
+                      6-Digit Verification Code
+                    </label>
+                    <div className="relative max-w-[240px] mx-auto">
+                      <input
+                        id="verification-code"
+                        type="text"
+                        maxLength={6}
+                        required
+                        value={verificationCode}
+                        onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ""))}
+                        placeholder="e.g. 123456"
+                        className="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-500 text-lg font-bold tracking-widest text-center transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <motion.button
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    id="verify-submit-btn"
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-blue-500/10 flex items-center justify-center gap-2 mt-4 cursor-pointer"
+                  >
+                    {loading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <>
+                        <LogIn size={16} />
+                        <span>Verify and Login</span>
+                      </>
+                    )}
+                  </motion.button>
+                </form>
+
+                <div className="mt-8 text-center border-t border-slate-200/60 pt-6 flex flex-col gap-3">
+                  <button
+                    type="button"
+                    onClick={handleResendCode}
+                    className="text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-800 transition-colors cursor-pointer"
+                  >
+                    Resend Verification Code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowVerification(false);
+                      setIsRegister(true);
+                      setError("");
+                      setResendSuccess("");
+                    }}
+                    className="text-xs font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                  >
+                    Back to Registration
                   </button>
                 </div>
               </motion.div>
@@ -633,10 +808,10 @@ export default function Login({ onLoginSuccess, websiteName, isAdminView = false
           <p className="font-semibold text-slate-500">
             Need support?{" "}
             <a
-              href="mailto:support@webacklinks.com"
+              href="mailto:mail@webacklinks.com"
               className="text-blue-600 hover:text-blue-700 font-extrabold transition-all hover:underline"
             >
-              support@webacklinks.com
+              mail@webacklinks.com
             </a>
           </p>
           <p className="text-[10px]">
